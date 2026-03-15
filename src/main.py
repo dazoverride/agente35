@@ -6,7 +6,8 @@ from datetime import datetime
 
 def init_db():
     """Inicializa la base de datos SQLite y crea la tabla si no existe."""
-    conn = sqlite3.connect('chat_history.db')
+    os.makedirs('db', exist_ok=True)
+    conn = sqlite3.connect('db/chat_history.db')
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
@@ -29,7 +30,8 @@ def init_db():
             ttft REAL,
             prompt_tokens INTEGER,
             prompt_time REAL,
-            prompt_tps REAL
+            prompt_tps REAL,
+            session_id TEXT
         )
     ''')
     
@@ -57,6 +59,12 @@ def init_db():
     except sqlite3.OperationalError:
         pass
         
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN session_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    cursor.execute("UPDATE messages SET session_id = 'historial_anterior' WHERE session_id IS NULL")
     conn.commit()
     return conn
 
@@ -64,7 +72,7 @@ def log_message(conn, role, content, thoughts="", model="", system_prompt="",
                 think_tokens=0, speak_tokens=0, total_tokens=0, 
                 think_time=0.0, speak_time=0.0, total_time=0.0, 
                 think_tps=0.0, speak_tps=0.0, total_tps=0.0,
-                ttft=0.0, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0):
+                ttft=0.0, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0, session_id=""):
     """Guarda un mensaje y sus estadísticas en la base de datos."""
     cursor = conn.cursor()
     cursor.execute('''
@@ -73,13 +81,13 @@ def log_message(conn, role, content, thoughts="", model="", system_prompt="",
             think_tokens, speak_tokens, total_tokens,
             think_time, speak_time, total_time,
             think_tps, speak_tps, total_tps,
-            ttft, prompt_tokens, prompt_time, prompt_tps
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ttft, prompt_tokens, prompt_time, prompt_tps, session_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (role, content, thoughts, model, system_prompt, 
           think_tokens, speak_tokens, total_tokens, 
           think_time, speak_time, total_time, 
           think_tps, speak_tps, total_tps,
-          ttft, prompt_tokens, prompt_time, prompt_tps))
+          ttft, prompt_tokens, prompt_time, prompt_tps, session_id))
     conn.commit()
 
 def main():
@@ -97,30 +105,108 @@ def main():
     Returns:
         None
     """
-    MODEL_NAME = 'qwen3.5:4b'
+    # Modelos disponibles
+    AVAILABLE_MODELS = [
+        'qwen3.5:0.2b',
+        'qwen3.5:0.4b',
+        'qwen3.5:0.9b'
+    ]
+    
+    MODEL_NAME = 'qwen3.5:0.4b'
     SYSTEM_PROMPT = ""
     
-    print(f"🤖 Asistente Virtual Ollama iniciado (Modelo: {MODEL_NAME} - Modo Pensamiento Nativo)")
-    print("Escribe 'salir' o 'exit' para terminar.\n")
+    print(f"🤖 Asistente Virtual Ollama iniciado (Modelo actual: {MODEL_NAME} - Modo Pensamiento Nativo)")
+    print("Escribe '/salir' o '/exit' para terminar.")
+    print("Comandos de sesión: '/new' o '/clear' (nueva), '/sessions' (cargar historial).")
+    print("Comando de modelo: '/model' (cambiar modelo activo).\n")
     
     # Inicializar Base de Datos
     conn = init_db()
     
     messages = []
+    current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     while True:
         try:
             user_input = input("\n🧑 Tú: ")
-            if user_input.lower() in ['salir', 'exit', 'quit']:
-                print("¡Hasta luego!")
-                break
-                
+            
             if not user_input.strip():
                 continue
                 
+            # Intercept custom terminal commands
+            if user_input.startswith('/'):
+                command = user_input.strip().lower()
+                if command in ['/salir', '/exit', '/quit']:
+                    print("¡Hasta luego!")
+                    break
+                elif command in ['/clear', '/new']:
+                    messages.clear()
+                    current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    print("✨ Nueva sesión iniciada. El contexto ha sido limpiado.")
+                    continue
+                elif command == '/sessions':
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT session_id, MIN(timestamp), content 
+                        FROM messages 
+                        WHERE role='user' 
+                        GROUP BY session_id 
+                        ORDER BY MIN(timestamp) DESC 
+                        LIMIT 10
+                    ''')
+                    sessions = cursor.fetchall()
+                    if not sessions:
+                        print("📂 No hay sesiones previas guardadas.")
+                        continue
+                        
+                    print("\n📂 Últimas 10 sesiones:")
+                    for i, (sid, ts, preview) in enumerate(sessions):
+                        pr_text = preview.replace('\n', ' ')
+                        if len(pr_text) > 50: pr_text = pr_text[:50] + "..."
+                        print(f"  [{i+1}] {ts} - {pr_text}")
+                        
+                    choice = input("\n🔢 Elige un número para cargar la sesión (o presiona Enter para cancelar): ")
+                    if choice.strip().isdigit():
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(sessions):
+                            selected_session = sessions[idx][0]
+                            # Cargar historial limpio (sin los pensamientos)
+                            cursor.execute("SELECT role, content FROM messages WHERE session_id = ? ORDER BY id ASC", (selected_session,))
+                            loaded_msgs = cursor.fetchall()
+                            messages.clear()
+                            for r, c in loaded_msgs:
+                                messages.append({'role': r, 'content': c})
+                            current_session_id = selected_session
+                            print(f"✅ Sesión cargada con {len(messages)} mensajes en el contexto.")
+                        else:
+                            print("❌ Número fuera de rango. Operación cancelada.")
+                    else:
+                        print("❌ Operación cancelada.")
+                    continue
+                elif command == '/model':
+                    print("\n🧮 Modelos disponibles:")
+                    for idx, mod in enumerate(AVAILABLE_MODELS):
+                        indicator = " (Actual)" if mod == MODEL_NAME else ""
+                        print(f"  [{idx+1}] {mod}{indicator}")
+                    
+                    choice = input("\n🔢 Elige un número para cambiar de modelo (o Enter para cancelar): ")
+                    if choice.strip().isdigit():
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(AVAILABLE_MODELS):
+                            MODEL_NAME = AVAILABLE_MODELS[idx]
+                            print(f"✅ Modelo cambiado exitosamente a: {MODEL_NAME}")
+                        else:
+                            print("❌ Número fuera de rango. Operación cancelada.")
+                    else:
+                        print("❌ Operación cancelada.")
+                    continue
+                else:
+                    print(f"⚠️ Comando desconocido: {command}")
+                    continue
+                
             messages.append({'role': 'user', 'content': user_input})
             # Guardar mensaje del usuario en SQLite
-            log_message(conn, 'user', user_input)
+            log_message(conn, 'user', user_input, session_id=current_session_id)
             
             print("🤖 Asistente: ", end="", flush=True)
             
@@ -241,7 +327,8 @@ def main():
                         think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
                         think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
                         think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
-                        ttft=ttft, prompt_tokens=prompt_eval_count, prompt_time=prompt_time, prompt_tps=prompt_tps)
+                        ttft=ttft, prompt_tokens=prompt_eval_count, prompt_time=prompt_time, prompt_tps=prompt_tps,
+                        session_id=current_session_id)
             
         except KeyboardInterrupt:
             print("\n¡Hasta luego!")
