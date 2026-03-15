@@ -107,13 +107,14 @@ def main():
     """
     # Modelos disponibles
     AVAILABLE_MODELS = [
-        'qwen3.5:0.2b',
-        'qwen3.5:0.4b',
-        'qwen3.5:0.9b'
+        'qwen3.5:0.8b',
+        'qwen3.5:2b',
+        'qwen3.5:4b',
+        'qwen3.5:9b'
     ]
     
-    MODEL_NAME = 'qwen3.5:0.4b'
-    SYSTEM_PROMPT = ""
+    MODEL_NAME = 'qwen3.5:4b'
+    SYSTEM_PROMPT = """Eres un asistente virtual amigable y útil. Tu objetivo principal es ayudar al usuario a resolver dudas, explorar ideas y asistir en tareas generales o de código de forma clara y directa. Mantén un tono conversacional, responde siempre en español y proporciona explicaciones concisas."""
     
     print(f"🤖 Asistente Virtual Ollama iniciado (Modelo actual: {MODEL_NAME} - Modo Pensamiento Nativo)")
     print("Escribe '/salir' o '/exit' para terminar.")
@@ -123,7 +124,7 @@ def main():
     # Inicializar Base de Datos
     conn = init_db()
     
-    messages = []
+    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
     current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     while True:
@@ -140,7 +141,7 @@ def main():
                     print("¡Hasta luego!")
                     break
                 elif command in ['/clear', '/new']:
-                    messages.clear()
+                    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
                     current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
                     print("✨ Nueva sesión iniciada. El contexto ha sido limpiado.")
                     continue
@@ -173,7 +174,7 @@ def main():
                             # Cargar historial limpio (sin los pensamientos)
                             cursor.execute("SELECT role, content FROM messages WHERE session_id = ? ORDER BY id ASC", (selected_session,))
                             loaded_msgs = cursor.fetchall()
-                            messages.clear()
+                            messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
                             for r, c in loaded_msgs:
                                 messages.append({'role': r, 'content': c})
                             current_session_id = selected_session
