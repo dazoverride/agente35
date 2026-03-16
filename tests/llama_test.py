@@ -10,7 +10,7 @@ from openai import OpenAI
 
 # Rutas
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUTA_MODELO = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "Qwen_Qwen3.5-9B-Q5_K_M.gguf")
+CARPETA_MODELOS = os.path.join(BASE_DIR, "models")
 RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "llama-server.exe")
 TEST_PROMPTS_FILE = os.path.join(BASE_DIR, 'tmp', 'pruebas.txt')
 DB_PATH = os.path.join(BASE_DIR, 'db', 'llama_test_history.db')
@@ -76,14 +76,16 @@ def log_message(conn, role, content, thoughts="", model="", system_prompt="",
           ttft, prompt_tokens, prompt_time, prompt_tps, session_id, modo_thinking))
     conn.commit()
 
-def iniciar_servidor(thinking=False):
+def iniciar_servidor(thinking=False, modelo_archivo=""):
     global servidor_process
     detener_servidor()  
+    
+    ruta_modelo_completa = os.path.join(CARPETA_MODELOS, modelo_archivo)
     
     kwargs = json.dumps({"enable_thinking": thinking})
     comando = [
         RUTA_LLAMA_SERVER,
-        "-m", RUTA_MODELO,
+        "-m", ruta_modelo_completa,
         "-c", "4096",
         "-ngl", "99",
         "--port", str(PUERTO),
@@ -126,11 +128,11 @@ def extract_prompts(filepath):
         prompts = matches
     return prompts
 
-def ejecutar_bateria(prompts, mod_thinking_activado=False, model_nombre="qwen3.5:9b-local"):
+def ejecutar_bateria(prompts, mod_thinking_activado=False, modelo_archivo=""):
     conn = init_db()
     
     # Arrancamos con el modo solicitado
-    iniciar_servidor(thinking=mod_thinking_activado)
+    iniciar_servidor(thinking=mod_thinking_activado, modelo_archivo=modelo_archivo)
     cliente = OpenAI(base_url=URL_BASE, api_key="local")
     
     SYSTEM_PROMPT = "Eres un asistente útil, directo y conciso."
@@ -138,15 +140,15 @@ def ejecutar_bateria(prompts, mod_thinking_activado=False, model_nombre="qwen3.5
     
     for idx, user_input in enumerate(prompts):
         historial_chat = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-        current_session_id = f"TEST_{model_nombre.replace(':', '_')}_{nombre_bateria}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_P{idx+1}"
+        current_session_id = f"TEST_{modelo_archivo.replace(':', '_')}_{nombre_bateria}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_P{idx+1}"
         
         print(f"\n" + "-"*80)
-        print(f"📝 {model_nombre} ({nombre_bateria}) - PRUEBA {idx+1}/{len(prompts)}")
+        print(f"📝 {modelo_archivo} ({nombre_bateria}) - PRUEBA {idx+1}/{len(prompts)}")
         print(f"🧑 Tú: {user_input}")
         print("-" * 80)
         
         historial_chat.append({'role': 'user', 'content': user_input})
-        log_message(conn, 'user', user_input, model=model_nombre, session_id=current_session_id, modo_thinking=int(mod_thinking_activado))
+        log_message(conn, 'user', user_input, model=modelo_archivo, session_id=current_session_id, modo_thinking=int(mod_thinking_activado))
         
         print("🤖 Asistente: ", end="", flush=True)
         
@@ -216,7 +218,7 @@ def ejecutar_bateria(prompts, mod_thinking_activado=False, model_nombre="qwen3.5
             print("✅ Prueba completada exitosamente.")
             
             log_message(conn, role='assistant', content=respuesta_completa, thoughts=pensamiento_completo,
-                        model=model_nombre, system_prompt=SYSTEM_PROMPT,
+                        model=modelo_archivo, system_prompt=SYSTEM_PROMPT,
                         think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
                         think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
                         think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
@@ -231,10 +233,21 @@ def ejecutar_bateria(prompts, mod_thinking_activado=False, model_nombre="qwen3.5
 
 def main():
     os.system("") 
+    
+    os.makedirs(CARPETA_MODELOS, exist_ok=True)
+    modelos_disponibles = [f for f in os.listdir(CARPETA_MODELOS) if f.endswith(".gguf")]
+    
+    if not modelos_disponibles:
+        print(f"❌ Error: No se encontraron modelos .gguf en {CARPETA_MODELOS}")
+        sys.exit(1)
+        
     print("="*80)
     print(f"🚀 INICIANDO BATERÍA DE PRUEBAS LOCAL QWEN LLAMA.CPP")
     print(f"📂 Extrayendo pruebas de: {TEST_PROMPTS_FILE}")
     print(f"💾 Guardando resultados en: {DB_PATH}")
+    print(f"📦 Modelos detectados para pruebas: {len(modelos_disponibles)}")
+    for m in modelos_disponibles:
+        print(f"  - {m}")
     print("="*80)
     
     prompts = extract_prompts(TEST_PROMPTS_FILE)
@@ -242,21 +255,24 @@ def main():
         print("❌ No se encontraron prompts en el archivo de origen. Revisa el formato y nombre de tmp/pruebas.txt.")
         return
         
-    print(f"\n📋 Detectados {len(prompts)} prompts. Iniciando fases (SIN PENSAR -> PENSANDO)...")
-    
-    print("\n\n" + "#"*40)
-    print("    🚀 FASE 1: MODO SIN THINKING")
-    print("#"*40)
-    ejecutar_bateria(prompts, mod_thinking_activado=False)
-    
-    time.sleep(2)
-    
-    print("\n\n" + "#"*40)
-    print("    🚀 FASE 2: MODO CON THINKING")
-    print("#"*40)
-    ejecutar_bateria(prompts, mod_thinking_activado=True)
-    
-    print("🎉\n\n=== BATERÍA DE PRUEBAS FINALIZADA ===")
+    for modelo in modelos_disponibles:
+        print(f"\n\n{'='*80}")
+        print(f"🧪 INICIANDO TESTS PARA EL MODELO: {modelo}")
+        print(f"{'='*80}")
+        
+        print("\n\n" + "#"*40)
+        print(f"    🚀 FASE 1: MODO SIN THINKING ({modelo})")
+        print("#"*40)
+        ejecutar_bateria(prompts, mod_thinking_activado=False, modelo_archivo=modelo)
+        
+        time.sleep(2)
+        
+        print("\n\n" + "#"*40)
+        print(f"    🚀 FASE 2: MODO CON THINKING ({modelo})")
+        print("#"*40)
+        ejecutar_bateria(prompts, mod_thinking_activado=True, modelo_archivo=modelo)
+        
+    print("🎉\n\n=== BATERÍAS DE PRUEBAS FINALIZADAS ===")
     print(f"Resultados de todos los benchmarks locales registrados en: {DB_PATH}")
 
 if __name__ == "__main__":

@@ -9,14 +9,22 @@ from openai import OpenAI
 
 # --- CONFIGURACIÓN ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUTA_MODELO = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "Qwen_Qwen3.5-9B-Q5_K_M.gguf")
+CARPETA_MODELOS = os.path.join(BASE_DIR, "models")
 RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "llama-server.exe")
 PUERTO = 8080
 URL_BASE = f"http://127.0.0.1:{PUERTO}/v1"
 
+# Obtener modelos disponibles
+os.makedirs(CARPETA_MODELOS, exist_ok=True)
+MODELOS_DISPONIBLES = [f for f in os.listdir(CARPETA_MODELOS) if f.endswith(".gguf")]
+if not MODELOS_DISPONIBLES:
+    print(f"❌ Error: No se encontraron modelos .gguf en {CARPETA_MODELOS}")
+    sys.exit(1)
+
 # Variables globales
 servidor_process = None
 modo_thinking_actual = False
+modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último en la lista (suele ser el más grande)
 historial_chat = []
 
 def init_db():
@@ -74,15 +82,20 @@ def log_message(conn, role, content, thoughts="", model="", system_prompt="",
           ttft, prompt_tokens, prompt_time, prompt_tps, session_id))
     conn.commit()
 
-def iniciar_servidor(thinking=False):
-    global servidor_process
+def iniciar_servidor(thinking=False, modelo=None):
+    global servidor_process, modelo_actual
     detener_servidor()  # Asegurarnos de que no haya otro corriendo
+    
+    if modelo is None:
+        modelo = modelo_actual
+        
+    ruta_modelo_completa = os.path.join(CARPETA_MODELOS, modelo)
     
     # Al pasar los argumentos en una lista a subprocess, Python maneja las comillas automáticamente
     kwargs = json.dumps({"enable_thinking": thinking})
     comando = [
         RUTA_LLAMA_SERVER, # Usando el ejecutable de la carpeta local
-        "-m", RUTA_MODELO,
+        "-m", ruta_modelo_completa,
         "-c", "4096",
         "-ngl", "99",
         "--port", str(PUERTO),
@@ -90,7 +103,7 @@ def iniciar_servidor(thinking=False):
     ]
     
     estado = "ACTIVADO" if thinking else "DESACTIVADO"
-    print(f"\n[+] Iniciando llama-server (Modo Thinking: {estado})...")
+    print(f"\n[+] Iniciando llama-server (Modelo: {modelo} | Thinking: {estado})...")
     
     # Redirigimos la salida del servidor para que no ensucie nuestro chat
     servidor_process = subprocess.Popen(comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -114,15 +127,16 @@ def imprimir_ayuda():
     print("Comandos disponibles:")
     print("  /modo think    -> Reinicia el servidor CON modo de pensamiento")
     print("  /modo nothink  -> Reinicia el servidor SIN modo de pensamiento")
+    print("  /modelo        -> Muestra la lista y permite cambiar de modelo GGUF")
     print("  /limpiar       -> Borra el historial de la conversación")
     print("  /salir         -> Apaga el servidor y cierra el programa")
     print("="*50 + "\n")
 
 def main():
-    global modo_thinking_actual, historial_chat
+    global modo_thinking_actual, historial_chat, modelo_actual
     
     # Iniciar con el modo por defecto (sin pensar)
-    iniciar_servidor(thinking=modo_thinking_actual)
+    iniciar_servidor(thinking=modo_thinking_actual, modelo=modelo_actual)
     cliente = OpenAI(base_url=URL_BASE, api_key="local")
     
     # Prompt de sistema inicial
@@ -164,6 +178,25 @@ def main():
                     cliente = OpenAI(base_url=URL_BASE, api_key="local")
                 else:
                     print("[!] El modo thinking ya está desactivado.")
+                continue
+            elif comando == "/modelo":
+                print("\n[+] Modelos disponibles en /models:")
+                for i, m in enumerate(MODELOS_DISPONIBLES):
+                    prefix = "📍" if m == modelo_actual else "  "
+                    print(f"{prefix} {i+1}. {m}")
+                    
+                sel = input("\nElige el número del modelo (o Intro para cancelar): ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(MODELOS_DISPONIBLES):
+                    modelo_nuevo = MODELOS_DISPONIBLES[int(sel)-1]
+                    if modelo_nuevo != modelo_actual:
+                        modelo_actual = modelo_nuevo
+                        iniciar_servidor(thinking=modo_thinking_actual, modelo=modelo_actual)
+                        cliente = OpenAI(base_url=URL_BASE, api_key="local")
+                        print(f"[+] Cambiado y reiniciado con éxito a modelo: {modelo_actual}")
+                    else:
+                        print("[!] Ya estás usando este modelo.")
+                else:
+                    print("[!] Cancelando el cambio de modelo.")
                 continue
 
             # Agregar mensaje del usuario al historial
@@ -250,7 +283,7 @@ def main():
                 historial_chat.append({"role": "assistant", "content": respuesta_completa})
                 
                 log_message(conn, role='assistant', content=respuesta_completa, thoughts=pensamiento_completo,
-                            model="qwen-local", system_prompt="Eres un asistente útil, directo y conciso.",
+                            model=modelo_actual, system_prompt="Eres un asistente útil, directo y conciso.",
                             think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
                             think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
                             think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
