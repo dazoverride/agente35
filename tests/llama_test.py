@@ -12,7 +12,8 @@ from openai import OpenAI
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_MODELOS = os.path.join(BASE_DIR, "models")
 RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "llama-server.exe")
-TEST_PROMPTS_FILE = os.path.join(BASE_DIR, 'tmp', 'pruebas.txt')
+TEST_PROMPTS_FILE_NORMAL = os.path.join(BASE_DIR, 'tmp', 'pruebas.txt')
+TEST_PROMPTS_FILE_HARD = os.path.join(BASE_DIR, 'tmp', 'pruebas_hard.txt')
 DB_PATH = os.path.join(BASE_DIR, 'db', 'llama_test_history.db')
 PUERTO = 8080
 URL_BASE = f"http://127.0.0.1:{PUERTO}/v1"
@@ -267,16 +268,24 @@ def main():
         
     print("="*80)
     print(f"🚀 INICIANDO BATERÍA DE PRUEBAS LOCAL QWEN LLAMA.CPP")
-    print(f"📂 Extrayendo pruebas de: {TEST_PROMPTS_FILE}")
     print(f"💾 Guardando resultados en: {DB_PATH}")
     print(f"📦 Modelos detectados para pruebas: {len(modelos_disponibles)}")
     for m in modelos_disponibles:
         print(f"  - {m}")
     print("="*80)
     
-    prompts = extract_prompts(TEST_PROMPTS_FILE)
+    print("\\n" + "="*80)
+    print("Elige el set de prompts a evaluar:")
+    print(f"  A. Set Normal (10 Preguntas) -> {TEST_PROMPTS_FILE_NORMAL}")
+    print(f"  B. Set HARD (50 Preguntas Complejas) -> {TEST_PROMPTS_FILE_HARD}")
+    modo_prompts = input("Introduce A o B (por defecto A): ").strip().upper()
+    
+    archivo_objetivo = TEST_PROMPTS_FILE_HARD if modo_prompts == "B" else TEST_PROMPTS_FILE_NORMAL
+    print(f"📂 Extrayendo pruebas de: {archivo_objetivo}")
+    
+    prompts = extract_prompts(archivo_objetivo)
     if not prompts:
-        print("❌ No se encontraron prompts en el archivo de origen. Revisa el formato y nombre de tmp/pruebas.txt.")
+        print("❌ No se encontraron prompts en el archivo de origen.")
         return
         
     print("\n" + "="*80)
