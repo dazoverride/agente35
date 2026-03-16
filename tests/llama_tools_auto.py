@@ -54,8 +54,8 @@ Tienes las siguientes herramientas pre-hechas a tu disposición:
   {
     "type": "function", "function": {
       "name": "crear_script_python", 
-      "description": "Crea y guarda un script de Python reutilizable en tu carpeta permanente 'workspace/scripts_auto' y lo ejecuta al instante devolviendo su salida. IMPORTANTE: DEBEN ser genéricos. No pongas valores fijos en el código (ej. no pongas c = 5 + 5). Usa siempre sys.argv o argparse para atrapar variables dinámicas desde la consola, para que el script ('ej: sumar_numeros.py') se quede guardado y puedas usarlo mil veces después cambiándole los argumentos.", 
-      "parameters": {"type": "object", "properties": {"nombre_script": {"type": "string", "description": "Nombre con el que se guardará el script en disco, ej: sumar_numeros.py"}, "script_code": {"type": "string", "description": "El código fuente en python completo. DEBE estar parametrizado y leer sys.argv. Usar print() al final para escupir la salida."}, "argumentos_iniciales": {"type": "string", "description": "Los argumentos separados por espacios para esta primera ejecución inmediata del script (opcional)."}}}, 
+      "description": "Crea y guarda un script de Python reutilizable en tu carpeta permanente 'workspace/scripts_auto' y lo ejecuta al instante devolviendo su salida. IMPORTANTE: DEBEN ser genéricos. No pongas valores fijos en el código (ej. no pongas c = 5 + 5). Usa siempre sys.argv o argparse para variables dinámicas. OBLIGATORIO: La primera línea del script DEBE ser un comentario literal empezando por '# DESCRIPCION: ' indicando brevemente en 1 línea qué hace el script y cómo se usan sus argumentos.", 
+      "parameters": {"type": "object", "properties": {"nombre_script": {"type": "string", "description": "Nombre con el que se guardará el script en disco, ej: sumar_numeros.py"}, "script_code": {"type": "string", "description": "El código fuente en python completo. DEBE estar parametrizado y leer sys.argv. Usar print() al final para escupir la salida. PRIMERA LÍNEA DEBE SER: # DESCRIPCION: [tu descripción]"}, "argumentos_iniciales": {"type": "string", "description": "Los argumentos separados por espacios para esta primera ejecución inmediata del script (opcional)."}}}, 
       "required": ["nombre_script", "script_code"]
     }
   },
@@ -90,19 +90,35 @@ Instrucciones de Uso:
 1. Explica en lenguaje humano natural lo que vas a hacer y piensa si ya creaste un script para esto antes. Si ya lo tienes, llama a 'ejecutar_script_guardado' en vez de crear uno nuevo.
 2. Emite SIEMPRE una sola etiqueta <tool_call> con tu petición estructurada en JSON.
 3. Espera silenciosamente a que se te reinyecte la etiqueta <tool_response>.
-4. IMPORTANTE: En 'crear_script_python', nunca dejes la lógica final hardcodeada. Programa herramientas genéricas modulares.
+4. IMPORTANTE: En 'crear_script_python', nunca dejes la lógica final hardcodeada. Programa herramientas genéricas modulares y OBLIGATORIAMENTE empieza la primera línea de tu script con el comentario '# DESCRIPCION: ' para que en próximos turnos tú mismo sepas qué hace este script y qué args pide.
 
 --- SCRIPTS DISPONIBLES EN TU ARSENAL DE 'workspace/scripts_auto' PARA REUTILIZAR HOY ---
 {lista_scripts}
 """
 
 def generar_system_prompt():
-    """Construye el SYSTEM_PROMPT inyectándole dinámicamente la lista real de scripts pre-existentes."""
+    """Construye el SYSTEM_PROMPT inyectándole dinámicamente la lista real de scripts pre-existentes y sus descripciones."""
     archivos = [f for f in os.listdir(WORKSPACE_AUTO) if f.endswith(".py")]
     if not archivos:
          lista_scripts = "[Aún no has creado ni guardado ningún script. Tu arsenal está vacío.]"
     else:
-         lista_scripts = "\n".join([f"- {archivo}" for archivo in archivos])
+         items = []
+         for archivo in archivos:
+             ruta_completa = os.path.join(WORKSPACE_AUTO, archivo)
+             descripcion = "Sin descripción (script no documentado)."
+             try:
+                 with open(ruta_completa, 'r', encoding='utf-8') as f:
+                     # Buscar en las primeras 5 líneas
+                     for i in range(5):
+                         linea = f.readline().strip()
+                         m = re.match(r"^#\s*DESCRIPCI[OÓ]N:\s*(.+)", linea, re.IGNORECASE)
+                         if m:
+                             descripcion = m.group(1).strip()
+                             break
+             except Exception:
+                 pass
+             items.append(f"- {archivo}: {descripcion}")
+         lista_scripts = "\n".join(items)
     
     return SYSTEM_PROMPT_TEMPLATE.replace("{lista_scripts}", lista_scripts)
 
