@@ -29,7 +29,11 @@ modo_thinking_actual = False
 modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último en la lista
 historial_chat = []
 
-SYSTEM_PROMPT = """Eres un asistente de Inteligencia Artificial avanzado con capacidades de ejecutar acciones en el sistema del usuario (Windows).
+WORKSPACE_AUTO = os.path.join(BASE_DIR, "workspace", "scripts_auto")
+os.makedirs(WORKSPACE_AUTO, exist_ok=True)
+
+# Plantilla Base
+SYSTEM_PROMPT_TEMPLATE = """Eres un asistente de Inteligencia Artificial avanzado con capacidades de ejecutar acciones en el sistema del usuario (Windows).
 Si necesitas realizar una acción o automatización compleja en nombre del usuario, DEBES usar el siguiente formato XML estricto:
 
 <tool_call>
@@ -87,7 +91,20 @@ Instrucciones de Uso:
 2. Emite SIEMPRE una sola etiqueta <tool_call> con tu petición estructurada en JSON.
 3. Espera silenciosamente a que se te reinyecte la etiqueta <tool_response>.
 4. IMPORTANTE: En 'crear_script_python', nunca dejes la lógica final hardcodeada. Programa herramientas genéricas modulares.
+
+--- SCRIPTS DISPONIBLES EN TU ARSENAL DE 'workspace/scripts_auto' PARA REUTILIZAR HOY ---
+{lista_scripts}
 """
+
+def generar_system_prompt():
+    """Construye el SYSTEM_PROMPT inyectándole dinámicamente la lista real de scripts pre-existentes."""
+    archivos = [f for f in os.listdir(WORKSPACE_AUTO) if f.endswith(".py")]
+    if not archivos:
+         lista_scripts = "[Aún no has creado ni guardado ningún script. Tu arsenal está vacío.]"
+    else:
+         lista_scripts = "\n".join([f"- {archivo}" for archivo in archivos])
+    
+    return SYSTEM_PROMPT_TEMPLATE.replace("{lista_scripts}", lista_scripts)
 
 def init_db():
     os.makedirs('db', exist_ok=True)
@@ -247,9 +264,6 @@ def procesar_herramienta(respuesta_completa, historial_chat):
             
             # --- RUTEO DE LA PETICIÓN AL MÓDULO CORRESPONDIENTE ---
             try:
-                WORKSPACE_AUTO = os.path.join(BASE_DIR, "workspace", "scripts_auto")
-                os.makedirs(WORKSPACE_AUTO, exist_ok=True)
-                
                 if tool_name == "ejecutar_comando_sistema":
                     comando = args.get("comando", "")
                     resultado = subprocess.run(
@@ -346,7 +360,9 @@ def main():
     iniciar_servidor(thinking=modo_thinking_actual, modelo=modelo_actual)
     cliente = OpenAI(base_url=URL_BASE, api_key="local")
     
-    historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Inyectar prompt dinámico recogiendo el estado actual del disco
+    prompt_dinamico = generar_system_prompt()
+    historial_chat = [{"role": "system", "content": prompt_dinamico}]
     imprimir_ayuda()
 
     try:
@@ -354,6 +370,11 @@ def main():
         conn = init_db()
         
         while True:
+            # Re-escanear y refrescar el arsenal en background en cada turno
+            # por si se acaban de crear scripts nuevos dinámicamente.
+            if len(historial_chat) > 0 and historial_chat[0]["role"] == "system":
+                 historial_chat[0]["content"] = generar_system_prompt()
+
             usuario = input("\033[92mTú:\033[0m ")
             if not usuario.strip(): continue
                 
@@ -361,7 +382,7 @@ def main():
             if comando in ["/salir", "/exit", "/quit"]:
                 break
             elif comando == "/limpiar":
-                historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
+                historial_chat = [{"role": "system", "content": generar_system_prompt()}]
                 current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
                 print("[!] Historial borrado.")
                 continue
