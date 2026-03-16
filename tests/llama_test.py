@@ -93,9 +93,33 @@ def iniciar_servidor(thinking=False, modelo_archivo=""):
     ]
     
     estado = "ACTIVADO" if thinking else "DESACTIVADO"
-    print(f"\n[+] Iniciando llama-server (Modo Thinking: {estado})... (Espera ~5s)")
+    print(f"\n[+] Iniciando llama-server (Modo Thinking: {estado})...")
     servidor_process = subprocess.Popen(comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(5)
+    
+    import urllib.request
+    
+    print("    [!] Esperando a que el modelo cargue en RAM/VRAM...")
+    max_intentos = 120
+    for i in range(max_intentos):
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{PUERTO}/health")
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get("status") in ["ok", "ready"]:
+                        break
+        except Exception:
+            pass
+            
+        if servidor_process.poll() is not None:
+             print("\n❌ Error: El proceso de llama-server ha colapsado (OOM/Crash).")
+             sys.exit(1)
+             
+        time.sleep(1)
+    else:
+        print("\n❌ Error: Tiempo de espera agotado al cargar el modelo.")
+        sys.exit(1)
+        
     print("[+] Servidor de pruebas en línea.\n")
 
 def detener_servidor():

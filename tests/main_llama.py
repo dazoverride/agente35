@@ -108,8 +108,30 @@ def iniciar_servidor(thinking=False, modelo=None):
     # Redirigimos la salida del servidor para que no ensucie nuestro chat
     servidor_process = subprocess.Popen(comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    # Esperar a que el servidor esté listo
-    time.sleep(5)
+    import urllib.request
+    
+    print("    [!] Esperando a que el modelo cargue en memoria (puede tardar dependiendo del PC y modelo)...")
+    max_intentos = 120 # 2 minutos de tolerancia
+    for i in range(max_intentos):
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{PUERTO}/health")
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get("status") in ["ok", "ready"]:
+                        break
+        except Exception:
+            pass
+            
+        if servidor_process.poll() is not None:
+             print("\n❌ Error: El proceso de llama-server ha colapsado o terminado inesperadamente (¿Falta memoria?).")
+             sys.exit(1)
+             
+        time.sleep(1)
+    else:
+        print("\n❌ Error: Tiempo de espera agotado al cargar el modelo.")
+        sys.exit(1)
+
     print("[+] Servidor en línea. ¡Listo para chatear!\n")
 
 def detener_servidor():
