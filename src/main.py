@@ -114,7 +114,7 @@ def main():
     ]
     
     MODEL_NAME = 'qwen3.5:4b'
-    SYSTEM_PROMPT = """Eres un asistente virtual amigable y útil. Tu objetivo principal es ayudar al usuario a resolver dudas, explorar ideas y asistir en tareas generales o de código de forma clara y directa. Mantén un tono conversacional, responde siempre en español y proporciona explicaciones concisas."""
+    SYSTEM_PROMPT = """ """
     
     print(f"🤖 Asistente Virtual Ollama iniciado (Modelo actual: {MODEL_NAME} - Modo Pensamiento Nativo)")
     print("Escribe '/salir' o '/exit' para terminar.")
@@ -216,7 +216,7 @@ def main():
                 messages=messages,
                 stream=True,
                 options={
-                    "temperature": 1.0,           
+                    "temperature": 0.6,           
                     "top_p": 0.95,
                     "top_k": 20,
                     "presence_penalty": 1.5,      
