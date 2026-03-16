@@ -58,3 +58,6 @@ db/*.sqlite3
 
 # Temporary files
 tmp/
+
+# Llama locally
+llama-b8352-bin-win-cuda-12.4-x64/
