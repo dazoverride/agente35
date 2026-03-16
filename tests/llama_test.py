@@ -255,22 +255,36 @@ def main():
         print("❌ No se encontraron prompts en el archivo de origen. Revisa el formato y nombre de tmp/pruebas.txt.")
         return
         
+    print("\n" + "="*80)
+    print("Elige las fases de prueba a ejecutar:")
+    print("  1. Solo Modo SIN Thinking")
+    print("  2. Solo Modo CON Thinking")
+    print("  3. Ambos modos (Secuencial)")
+    opcion = input("Introduce 1, 2 o 3 (por defecto 3): ").strip()
+    
+    if opcion not in ["1", "2", "3"]:
+        opcion = "3"
+        print("> Opción no válida. Usando por defecto: 3 (Ambos)")
+        
     for modelo in modelos_disponibles:
         print(f"\n\n{'='*80}")
         print(f"🧪 INICIANDO TESTS PARA EL MODELO: {modelo}")
         print(f"{'='*80}")
         
-        print("\n\n" + "#"*40)
-        print(f"    🚀 FASE 1: MODO SIN THINKING ({modelo})")
-        print("#"*40)
-        ejecutar_bateria(prompts, mod_thinking_activado=False, modelo_archivo=modelo)
+        if opcion in ["1", "3"]:
+            print("\n\n" + "#"*40)
+            print(f"    🚀 FASE 1: MODO SIN THINKING ({modelo})")
+            print("#"*40)
+            ejecutar_bateria(prompts, mod_thinking_activado=False, modelo_archivo=modelo)
+            
+            if opcion == "3":
+                time.sleep(2)
         
-        time.sleep(2)
-        
-        print("\n\n" + "#"*40)
-        print(f"    🚀 FASE 2: MODO CON THINKING ({modelo})")
-        print("#"*40)
-        ejecutar_bateria(prompts, mod_thinking_activado=True, modelo_archivo=modelo)
+        if opcion in ["2", "3"]:
+            print("\n\n" + "#"*40)
+            print(f"    🚀 FASE 2: MODO CON THINKING ({modelo})")
+            print("#"*40)
+            ejecutar_bateria(prompts, mod_thinking_activado=True, modelo_archivo=modelo)
         
     print("🎉\n\n=== BATERÍAS DE PRUEBAS FINALIZADAS ===")
     print(f"Resultados de todos los benchmarks locales registrados en: {DB_PATH}")
