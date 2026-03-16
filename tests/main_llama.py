@@ -3,6 +3,8 @@ import time
 import sys
 import json
 import os
+import sqlite3
+from datetime import datetime
 from openai import OpenAI
 
 # --- CONFIGURACIÓN ---
@@ -16,6 +18,61 @@ URL_BASE = f"http://127.0.0.1:{PUERTO}/v1"
 servidor_process = None
 modo_thinking_actual = False
 historial_chat = []
+
+def init_db():
+    """Inicializa la base de datos SQLite y crea la tabla si no existe."""
+    os.makedirs('db', exist_ok=True)
+    conn = sqlite3.connect('db/llama_history.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            thoughts TEXT,
+            model TEXT,
+            system_prompt TEXT,
+            think_tokens INTEGER,
+            speak_tokens INTEGER,
+            total_tokens INTEGER,
+            think_time REAL,
+            speak_time REAL,
+            total_time REAL,
+            think_tps REAL,
+            speak_tps REAL,
+            total_tps REAL,
+            ttft REAL,
+            prompt_tokens INTEGER,
+            prompt_time REAL,
+            prompt_tps REAL,
+            session_id TEXT
+        )
+    ''')
+    conn.commit()
+    return conn
+
+def log_message(conn, role, content, thoughts="", model="", system_prompt="", 
+                think_tokens=0, speak_tokens=0, total_tokens=0, 
+                think_time=0.0, speak_time=0.0, total_time=0.0, 
+                think_tps=0.0, speak_tps=0.0, total_tps=0.0,
+                ttft=0.0, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0, session_id=""):
+    """Guarda un mensaje y sus estadísticas en la base de datos."""
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO messages (
+            role, content, thoughts, model, system_prompt,
+            think_tokens, speak_tokens, total_tokens,
+            think_time, speak_time, total_time,
+            think_tps, speak_tps, total_tps,
+            ttft, prompt_tokens, prompt_time, prompt_tps, session_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (role, content, thoughts, model, system_prompt, 
+          think_tokens, speak_tokens, total_tokens, 
+          think_time, speak_time, total_time, 
+          think_tps, speak_tps, total_tps,
+          ttft, prompt_tokens, prompt_time, prompt_tps, session_id))
+    conn.commit()
 
 def iniciar_servidor(thinking=False):
     global servidor_process
@@ -74,6 +131,9 @@ def main():
     imprimir_ayuda()
 
     try:
+        current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        conn = init_db()
+        
         while True:
             usuario = input("\033[92mTú:\033[0m ")
             
@@ -86,6 +146,7 @@ def main():
                 break
             elif comando == "/limpiar":
                 historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+                current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
                 print("[!] Historial borrado.")
                 continue
             elif comando == "/modo think":
@@ -107,10 +168,20 @@ def main():
 
             # Agregar mensaje del usuario al historial
             historial_chat.append({"role": "user", "content": usuario})
+            log_message(conn, 'user', usuario, session_id=current_session_id)
             
             print("\033[96mAsistente:\033[0m ", end="", flush=True)
             
             try:
+                t0 = time.time()
+                t_first_token = None
+                t_think_start = None
+                t_think_end = None
+                t_speak_start = None
+                t_speak_end = None
+                think_token_count = 0
+                speak_token_count = 0
+                
                 # Petición a llama-server con streaming para ver la respuesta en tiempo real
                 stream = cliente.chat.completions.create(
                     model="qwen-local",
@@ -124,30 +195,67 @@ def main():
                 empezo_respuesta_final = False
                 
                 for chunk in stream:
-                    # Extraer el fragmento de texto desde la lista de choices
+                    if t_first_token is None:
+                        t_first_token = time.time()
+                        
+                    # La estructura JSON de llama-server la mapeamos a la de OpenAI
                     delta = chunk.choices[0].delta
                     
-                    # 1. Capturar y mostrar el "Pensamiento" (reasoning_content)
                     if hasattr(delta, 'reasoning_content') and delta.reasoning_content is not None:
-                        # Imprimimos el pensamiento en color gris oscuro
+                        if t_think_start is None:
+                            t_think_start = time.time()
+                            
+                        think_token_count += 1
                         print(f"\033[90m{delta.reasoning_content}\033[0m", end="", flush=True)
                         pensamiento_completo += delta.reasoning_content
                         
-                    # 2. Capturar y mostrar el "Contenido" (la respuesta final)
-                    if hasattr(delta, 'content') and delta.content is not None:
-                        # Si es la primera vez que entramos a la respuesta final y hubo pensamiento previo
+                    elif hasattr(delta, 'content') and delta.content is not None:
+                        if t_think_end is None and pensamiento_completo != "":
+                            t_think_end = time.time()
+                            
+                        if t_speak_start is None:
+                            t_speak_start = time.time()
+                            
                         if not empezo_respuesta_final and pensamiento_completo != "":
                             print("\n\n\033[92m[Respuesta Final:]\033[0m\n", end="")
                             empezo_respuesta_final = True
                             
-                        # Imprimimos la respuesta final normal
+                        speak_token_count += 1
                         print(delta.content, end="", flush=True)
                         respuesta_completa += delta.content
                         
+                if t_speak_end is None:
+                    t_speak_end = time.time()
+                    
                 print("\n") # Salto de línea final
                 
-                # Guardar SOLO la respuesta final en el historial (no queremos que el modelo lea sus propios pensamientos pasados)
+                # Calculos de estadisticas
+                ttft = (t_first_token - t0) if t_first_token else 0.0
+                dur_think = (t_think_end - t_think_start) if t_think_end and t_think_start else 0.0
+                dur_speak = (t_speak_end - t_speak_start) if t_speak_end and t_speak_start else 0.0
+                dur_total = dur_think + dur_speak
+                total_tokens = think_token_count + speak_token_count
+                
+                tps_think = (think_token_count / dur_think) if dur_think > 0 else 0.0
+                tps_speak = (speak_token_count / dur_speak) if dur_speak > 0 else 0.0
+                tps_total = (total_tokens / dur_total) if dur_total > 0 else 0.0
+                
+                print(f"\033[36m📊 [Estadísticas de la Inferencia]\033[0m")
+                print(f"\033[36m  ├─ ⏱️ Reacción (TTFT) : {ttft:.2f}s (Tiempo hasta el primer token)\033[0m")
+                print(f"\033[36m  ├─ 🧠 Pensamiento     : {think_token_count} tokens | Tiempo: {dur_think:.2f}s | Velocidad: {tps_think:.2f} t/s\033[0m")
+                print(f"\033[36m  ├─ 🗣️ Respuesta       : {speak_token_count} tokens | Tiempo: {dur_speak:.2f}s | Velocidad: {tps_speak:.2f} t/s\033[0m")
+                print(f"\033[36m  └─ 🚀 Total Generado  : {total_tokens} tokens | Tiempo: {dur_total:.2f}s | Velocidad: {tps_total:.2f} t/s\033[0m\n")
+                
+                # Guardar SOLO la respuesta final en el historial
                 historial_chat.append({"role": "assistant", "content": respuesta_completa})
+                
+                log_message(conn, role='assistant', content=respuesta_completa, thoughts=pensamiento_completo,
+                            model="qwen-local", system_prompt="Eres un asistente útil, directo y conciso.",
+                            think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
+                            think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
+                            think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
+                            ttft=ttft, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0, 
+                            session_id=current_session_id)
                 
             except Exception as e:
                 print(f"\n[!] Error de conexión: {e}")
@@ -157,8 +265,10 @@ def main():
     except KeyboardInterrupt:
         print("\n[!] Interrupción detectada.")
     finally:
-        # Asegurarnos SIEMPRE de matar el servidor al salir
+        # Asegurarnos SIEMPRE de matar el servidor al salir y cerrar base de datos
         detener_servidor()
+        if 'conn' in locals():
+            conn.close()
         print("¡Adiós!")
 
 if __name__ == "__main__":
