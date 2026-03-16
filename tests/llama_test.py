@@ -191,6 +191,7 @@ def ejecutar_bateria(prompts, mod_thinking_activado=False, modelo_archivo=""):
                 model="qwen-local",
                 messages=historial_chat,
                 temperature=0.6,
+                max_tokens=1024, # Llenamos el parámetro de salida máxima para prevenir colapsos en modelos rotos como el 0.8B
                 stream=True
             )
             
@@ -269,10 +270,38 @@ def main():
     print("="*80)
     print(f"🚀 INICIANDO BATERÍA DE PRUEBAS LOCAL QWEN LLAMA.CPP")
     print(f"💾 Guardando resultados en: {DB_PATH}")
-    print(f"📦 Modelos detectados para pruebas: {len(modelos_disponibles)}")
-    for m in modelos_disponibles:
-        print(f"  - {m}")
+    print(f"📦 Modelos detectados en {CARPETA_MODELOS}:")
+    for idx, m in enumerate(modelos_disponibles, 1):
+        print(f"  {idx}. {m}")
     print("="*80)
+    
+    print("\\n" + "="*80)
+    print("Elige qué modelos evaluar (puedes elegir varios separados por coma):")
+    print("  Ejemplo: '2' (Solo el modelo dos)")
+    print("  Ejemplo: '1,3,4' (Omite el modelo 2)")
+    print("  Ejemplo: 'all' o Intro (Todos los modelos)")
+    seleccion_modelos = input("Introduce tu selección: ").strip().lower()
+    
+    modelos_a_evaluar = []
+    if not seleccion_modelos or seleccion_modelos == 'all':
+        modelos_a_evaluar = modelos_disponibles
+    else:
+        indices = [i.strip() for i in seleccion_modelos.split(',') if i.strip()]
+        for i in indices:
+            if i.isdigit():
+                idx = int(i) - 1
+                if 0 <= idx < len(modelos_disponibles):
+                    modelos_a_evaluar.append(modelos_disponibles[idx])
+                else:
+                    print(f"⚠️ Ignorando índice inválido: {i}")
+                    
+    if not modelos_a_evaluar:
+        print("❌ Ningún modelo válido seleccionado. Usando todos por defecto.")
+        modelos_a_evaluar = modelos_disponibles
+        
+    print(f"\\n> Modelos finales seleccionados para la prueba: {len(modelos_a_evaluar)}")
+    for m in modelos_a_evaluar:
+        print(f"  - {m}")
     
     print("\\n" + "="*80)
     print("Elige el set de prompts a evaluar:")
@@ -299,7 +328,7 @@ def main():
         opcion = "3"
         print("> Opción no válida. Usando por defecto: 3 (Ambos)")
         
-    for modelo in modelos_disponibles:
+    for modelo in modelos_a_evaluar:
         print(f"\n\n{'='*80}")
         print(f"🧪 INICIANDO TESTS PARA EL MODELO: {modelo}")
         print(f"{'='*80}")
