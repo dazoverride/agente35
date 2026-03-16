@@ -1,0 +1,35 @@
+=== HISTORIAL DE PROGRAMAS CREADOS ===
+- 1_analisis_sentimiento_tweets : Script para detectar sentimiento (positivo/negativo) en textos usando palabras clave.
+- 2_organizador_archivos_inteligente : Organizador automático de archivos por categorías y subcategorías.
+- 3_buscador_recetas_nutricion : Buscador de recetas interactivo con filtro por calorías.
+- 4_manejador_citas_cli : Gestor de agenda de citas con persistencia en JSON y filtros de fecha.
+- 5_monitorizacion_servicios_cli : Monitor CLI para estado y logs de servicios del sistema.
+- 6_bot_simulador_chat_gpt : Simulador de chat interactivo con respuestas contextuales.
+- 7_bot_nube_automatizada : Simulador de bot de atención al cliente con gestión de filas y respuestas automáticas.
+- 8_scraper_precios_web : Extractor de precios de e-commerce básico usando BeautifulSoup.
+- 9_convertidor_ficheros_binarios : Analizador forense ligero para inspección de firmas mágicas y datos binarios.
+- 10_automatizador_reportes_pdf : Generador de reportes consolidados a partir de múltiples archivos de texto.
+- 11_autor_meme_generativo : Generador de ideas de memes mediante texto aleatorio y plantillas.
+- 12_monitor_rutas_api : Monitor de salud y prueba de endpoints REST basado en inventario de API.
+- 13_minimizador_consumo_energia : Herramienta de diagnóstico rápido para auditar uso de recursos (CPU/RAM/Disco) sin alterar procesos.
+- 14_sincronizador_carpeta_diff : Utilidad CLI para comparar estructura y contenido de dos carpetas locales.
+- 15_automatizador_email_reportes : Herramienta CLI para enviar notificaciones masivas de reportes por correo electrónico con plantillas dinámicas.
+- 16_automatizador_ubicacion_gps : Sistema CLI para registrar y gestionar logs de ubicación GPS con persistencia JSON y exportación CSV.
+- 17_sintetizador_voz_texto : Asistente de voz interactivo con reconocimiento y síntesis de voz en Python.
+- 18_manejador_escalas_equipo : Gestor CLI de escalas de equipo y personal con persistencia JSON.
+- 19_generador_reportes_financieros_cli : Generador de reportes financieros (ingresos/gastos) a partir de un archivo JSON de transacciones.
+- 20_analisis_red_social_nodos : Analizador CLI de redes sociales basado en grafos para calcular centralidad, densidad y caminos.
+- 21_escalador_dificultad_juegos : Herramienta interactiva para gestionar la dificultad y niveles de un juego de preguntas con persistencia en JSON.
+- 22_simulador_carga_sistema : Simulador CLI de carga de recursos y fallos de servicios.
+- 23_sincronizador_base_datos_local : Herramienta CLI para comparar dumps de bases de datos JSON o SQL y generar reportes de diferencias.
+- 24_visualizador_red_neural : Generador de topologías de redes neuronales aleatorias con visualización gráfica y cálculo de métricas estructurales.
+- 25_optimizador_rutas_entrega : Optimizador CLI de rutas de entrega usando algoritmo de vecino más cercano.
+- 26_simulador_ciberataque_red : Simulador CLI de ataques DDoS y defensas en redes de servidores.
+- 27_sintetizador_audio_generativo : Generador de ondas de audio WAV usando matemáticas básicas y modulación de frecuencia.
+- 28_analisis_patrones_texto : Analizador CLI que detecta patrones regulares (emails, URLs, fechas) y palabras repetidas en textos.
+- 29_cifrador_mensajes_aes : Herramienta CLI para cifrar y descifrar mensajes con AES-256 y almacenamiento seguro de claves.
+- 30_analisis_estructura_json : Analizador profundo de archivos JSON que genera estadísticas sobre estructura, tipos de datos y anidamiento.
+- 31_compilador_lenguaje_simple : Compilador interpretador básico para un DSL con variables, funciones y operaciones.
+- 32_visualizador_red_neural_interactivo : Generador de topologías de redes neuronales con cálculo de métricas estructurales y visualización ASCII.
+- 33_automatizador_sincronizacion_cloud : Sincronizador automático de archivos locales a remotos con detección de cambios por hash y registro de logs.
+- 34_automatizador_pruebas_carga_api : Simulador de carga de tráfico HTTP para pruebas de rendimiento de APIs REST.

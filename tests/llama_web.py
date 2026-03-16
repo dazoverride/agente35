@@ -1,0 +1,595 @@
+import subprocess
+import time
+import sys
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime
+from flask import Flask, request, Response, render_template_string, jsonify
+from openai import OpenAI
+
+# --- CONFIGURACIÓN ---
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CARPETA_MODELOS = os.path.join(BASE_DIR, "models")
+RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "llama-server.exe")
+PUERTO_LLAMA = 8080
+URL_BASE = f"http://127.0.0.1:{PUERTO_LLAMA}/v1"
+PUERTO_WEB = 5000
+
+os.makedirs(CARPETA_MODELOS, exist_ok=True)
+MODELOS_DISPONIBLES = [f for f in os.listdir(CARPETA_MODELOS) if f.endswith(".gguf")]
+if not MODELOS_DISPONIBLES:
+    print(f"❌ Error: No se encontraron modelos .gguf en {CARPETA_MODELOS}")
+    sys.exit(1)
+
+servidor_process = None
+modo_thinking_actual = False
+modelo_actual = MODELOS_DISPONIBLES[-1]
+historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+cliente_openai = None
+
+app = Flask(__name__)
+
+# --- HTML/CSS/JS FRONTEND ESTÉTICO ---
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen 3.5 - Interfaz Web</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --chat-bg: #1e293b;
+            --user-msg: #3b82f6;
+            --bot-msg: #334155;
+            --think-bg: #0f172a;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --border: #475569;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+        }
+
+        .logo { font-size: 1.25rem; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+        .logo span { color: var(--accent); }
+
+        .controls { display: flex; gap: 1rem; align-items: center; }
+        
+        select, button {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        button { cursor: pointer; background-color: var(--bot-msg); }
+        button:hover { border-color: var(--accent); }
+        
+        .btn-primary { background-color: var(--accent); color: white; border: none; font-weight: 500;}
+        .btn-primary:hover { background-color: var(--accent-hover); }
+
+        #chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .message {
+            max-width: 80%;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .message.user { align-self: flex-end; }
+        .message.bot { align-self: flex-start; }
+
+        .bubble {
+            padding: 1rem 1.25rem;
+            border-radius: 12px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .user .bubble { background-color: var(--user-msg); border-bottom-right-radius: 2px; }
+        .bot .bubble { background-color: var(--bot-msg); border-bottom-left-radius: 2px; border: 1px solid var(--border); }
+        
+        /* Contenedor de Pensamiento */
+        .think-block {
+            background-color: var(--think-bg);
+            border-left: 3px solid var(--text-muted);
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-style: italic;
+            white-space: pre-wrap;
+            display: none;
+        }
+
+        .think-block.active { display: block; }
+        .think-header { font-weight: 600; font-size: 0.8rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 5px;}
+        
+        .content-block { white-space: pre-wrap; }
+
+        #input-area {
+            padding: 1.5rem 2rem;
+            background-color: var(--chat-bg);
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+
+        textarea {
+            flex: 1;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: inherit;
+            font-size: 1rem;
+            resize: none;
+            height: 24px;
+            min-height: 24px;
+            max-height: 150px;
+            outline: none;
+            transition: border-color 0.2s;
+            overflow-y: hidden;
+        }
+
+        textarea:focus { border-color: var(--accent); }
+
+        .btn-send {
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.2s, background-color 0.2s;
+            box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+            flex-shrink: 0;
+        }
+        
+        .btn-send:hover { background-color: var(--accent-hover); transform: scale(1.05); }
+        .btn-send:disabled { background-color: var(--border); cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-send svg { width: 20px; height: 20px; fill: currentColor; }
+
+        /* Loader pulse */
+        .typing-indicator { display: none; align-items: center; gap: 5px; padding: 0.5rem 1rem; color: var(--text-muted); font-size: 0.9rem; }
+        .typing-indicator span { width: 6px; height: 6px; background-color: var(--text-muted); border-radius: 50%; animation: pulse 1.5s infinite; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes pulse { 0%, 100% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1.2); opacity: 1; } }
+        
+        /* Estilos Markdown Básicos */
+        .bot .bubble code { background: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+        .bot .bubble pre { background: #0f172a; padding: 1rem; border-radius: 6px; overflow-x: auto; border: 1px solid #334155; }
+        .bot .bubble p { margin-top: 0; }
+        .bot .bubble p:last-child { margin-bottom: 0; }
+        
+        /* 📱 RESPONSIVE MEDIA QUERIES PARA MÓVIL */
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                padding: 1rem;
+                gap: 1rem;
+                align-items: stretch;
+            }
+            
+            .controls {
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 0.5rem;
+            }
+            
+            .controls select, .controls label {
+                font-size: 0.8rem;
+                padding: 0.4rem 0.6rem;
+                flex: 1 1 auto;
+                text-align: center;
+            }
+            
+            #chat-container {
+                padding: 1rem 0.5rem;
+            }
+            
+            .message {
+                max-width: 95%; /* Ocupar casi toda la pantalla ancho */
+            }
+            
+            #input-area {
+                padding: 1rem;
+                gap: 0.5rem;
+            }
+            
+            textarea {
+                padding: 0.75rem;
+                font-size: 16px; /* Evita que el iPhone haga auto-zoom */
+            }
+            
+            .btn-send {
+                width: 44px;
+                height: 44px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 7.1"/><path d="M12 12l9.9 4.9"/></svg>
+            Qwen <span>WebUI</span>
+        </div>
+        <div class="controls">
+            <select id="model-select" onchange="cambiarConfig()">
+                <!-- Modelos inyectados por JS -->
+            </select>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem;">
+                <input type="checkbox" id="think-toggle" onchange="cambiarConfig()">
+                Modo Thinking
+            </label>
+            <button onclick="limpiarChat()">Limpiar Chat</button>
+        </div>
+    </header>
+
+    <div id="chat-container">
+        <div class="message bot">
+            <div class="bubble">
+                <div class="content-block">¡Hola! Soy tu asistente Qwen. ¿En qué puedo ayudarte hoy?</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="typing-indicator" id="typing">
+        Qwen está escribiendo <span></span><span></span><span></span>
+    </div>
+
+    <div id="input-area">
+        <textarea id="user-input" placeholder="Escribe tu mensaje aquí... (Shift+Enter para nueva línea)" rows="1"></textarea>
+        <button class="btn-send" id="send-btn" onclick="enviarMensaje()">
+            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+    </div>
+
+    <!-- Librería Marcada para renderizar Markdown de forma estética -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const typing = document.getElementById('typing');
+        const modelSelect = document.getElementById('model-select');
+        const thinkToggle = document.getElementById('think-toggle');
+        
+        let isGenerating = false;
+
+        // Auto-resize textarea
+        userInput.addEventListener('input', function() {
+            this.style.height = '24px';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        userInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                enviarMensaje();
+            }
+        });
+
+        // Cargar estado inicial
+        fetch('/api/status').then(r => r.json()).then(data => {
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m; opt.textContent = m;
+                if(m === data.current_model) opt.selected = true;
+                modelSelect.appendChild(opt);
+            });
+            thinkToggle.checked = data.thinking;
+        });
+
+        async function cambiarConfig() {
+            const model = modelSelect.value;
+            const think = thinkToggle.checked;
+            modelSelect.disabled = true;
+            thinkToggle.disabled = true;
+            
+            await fetch('/api/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({modelo: model, thinking: think})
+            });
+            
+            modelSelect.disabled = false;
+            thinkToggle.disabled = false;
+        }
+
+        async function limpiarChat() {
+            if(isGenerating) return;
+            await fetch('/api/clear', {method: 'POST'});
+            chatContainer.innerHTML = `<div class="message bot"><div class="bubble"><div class="content-block">Chat reiniciado. ¡Hola de nuevo!</div></div></div>`;
+        }
+
+        function appendMessage(text, isUser = false) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+            msgDiv.innerHTML = `<div class="bubble"><div class="content-block">${isUser ? text.replace(/\\n/g, '<br>') : text}</div></div>`;
+            chatContainer.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return msgDiv;
+        }
+
+        async function enviarMensaje() {
+            const text = userInput.value.trim();
+            if (!text || isGenerating) return;
+
+            // Bloquear input
+            isGenerating = true;
+            userInput.value = '';
+            userInput.style.height = '24px';
+            userInput.disabled = true;
+            sendBtn.disabled = true;
+            
+            appendMessage(text, true);
+            typing.style.display = 'flex';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            // Crear el contenedor para la respuesta entrante
+            const botMsg = document.createElement('div');
+            botMsg.className = 'message bot';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            botMsg.appendChild(bubble);
+            chatContainer.appendChild(botMsg);
+            
+            const thinkBlock = document.createElement('div');
+            thinkBlock.className = 'think-block';
+            thinkBlock.innerHTML = '<div class="think-header"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><path d="M9 21h6"/></svg> Pensando...</div>';
+            const thinkContent = document.createElement('span');
+            thinkBlock.appendChild(thinkContent);
+            bubble.appendChild(thinkBlock);
+            
+            const mainContent = document.createElement('div');
+            mainContent.className = 'content-block';
+            bubble.appendChild(mainContent);
+
+            let rawMainText = "";
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ message: text })
+                });
+
+                typing.style.display = 'none';
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.replace('data: ', '');
+                            if (dataStr === '[DONE]') break;
+                            
+                            try {
+                                const payload = JSON.parse(dataStr);
+                                if (payload.type === 'think') {
+                                    thinkBlock.classList.add('active');
+                                    thinkContent.textContent += payload.content;
+                                } else if (payload.type === 'speak') {
+                                    rawMainText += payload.content;
+                                    mainContent.innerHTML = marked.parse(rawMainText); // Renderizar Markdown on the fly
+                                }
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            } catch (e) {}
+                        }
+                    }
+                }
+            } catch (err) {
+                mainContent.innerHTML = `<em>Error de conexión con el servidor local.</em>`;
+            } finally {
+                isGenerating = false;
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+                typing.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+# --- LÓGICA DEL SERVIDOR LLAMA ---
+def iniciar_servidor_llama(thinking=False, modelo=None):
+    global servidor_process, modelo_actual, modo_thinking_actual, cliente_openai
+    
+    if servidor_process is not None:
+        servidor_process.terminate()
+        servidor_process.wait()
+        
+    if modelo is not None:
+         modelo_actual = modelo
+         
+    modo_thinking_actual = thinking
+    ruta_modelo_completa = os.path.join(CARPETA_MODELOS, modelo_actual)
+    
+    kwargs = json.dumps({"enable_thinking": modo_thinking_actual})
+    comando = [
+        RUTA_LLAMA_SERVER, 
+        "-m", ruta_modelo_completa,
+        "-c", "4096",
+        "-ngl", "99",
+        "--port", str(PUERTO_LLAMA),
+        "--chat-template-kwargs", kwargs
+    ]
+    
+    print(f"\n[+] Iniciando Llama-Server en background (Modelo: {modelo_actual})")
+    servidor_process = subprocess.Popen(comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    import urllib.request
+    for i in range(120):
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{PUERTO_LLAMA}/health")
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get("status") in ["ok", "ready"]:
+                        break
+        except Exception:
+            pass
+        time.sleep(1)
+        
+    print("[+] Llama-Server Listo.")
+    cliente_openai = OpenAI(base_url=URL_BASE, api_key="local")
+
+def detener_servidor_llama():
+    global servidor_process
+    if servidor_process is not None:
+        servidor_process.terminate()
+        servidor_process.wait()
+
+# --- RUTAS DE FLASK ---
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    return jsonify({
+        "models": MODELOS_DISPONIBLES,
+        "current_model": modelo_actual,
+        "thinking": modo_thinking_actual
+    })
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    data = request.json
+    modelo_req = data.get('modelo', modelo_actual)
+    thinking_req = data.get('thinking', modo_thinking_actual)
+    
+    if modelo_req != modelo_actual or thinking_req != modo_thinking_actual:
+        iniciar_servidor_llama(thinking=thinking_req, modelo=modelo_req)
+        
+    return jsonify({"status": "success"})
+
+@app.route('/api/clear', methods=['POST'])
+def clear_chat():
+    global historial_chat
+    historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+    return jsonify({"status": "success"})
+
+@app.route('/api/chat', methods=['POST'])
+def chat_stream():
+    global historial_chat, cliente_openai
+    data = request.json
+    user_message = data.get('message', '')
+    
+    if not user_message:
+        return jsonify({"error": "Empty message"}), 400
+        
+    historial_chat.append({"role": "user", "content": user_message})
+
+    def generate():
+        try:
+            stream = cliente_openai.chat.completions.create(
+                model="qwen-local",
+                messages=historial_chat,
+                temperature=0.6,
+                stream=True
+            )
+            
+            respuesta_completa = ""
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                
+                # Pensamientos
+                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                    payload = json.dumps({"type": "think", "content": delta.reasoning_content})
+                    yield f"data: {payload}\n\n"
+                    
+                # Respuesta final hablada
+                elif hasattr(delta, 'content') and delta.content:
+                    respuesta_completa += delta.content
+                    payload = json.dumps({"type": "speak", "content": delta.content})
+                    yield f"data: {payload}\n\n"
+            
+            historial_chat.append({"role": "assistant", "content": respuesta_completa})
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            print(f"Error en stream: {e}")
+            yield f"data: {json.dumps({'type': 'speak', 'content': 'Error interno del servidor.'})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+if __name__ == '__main__':
+    try:
+        # Arranca el motor LLM en segundo plano por primera vez
+        iniciar_servidor_llama(thinking=False)
+        print(f"\n🚀 Servidor web iniciado y expuesto a red local!\n")
+        print(f"   ► En este equipo abre: http://127.0.0.1:{PUERTO_WEB}")
+        print(f"   ► En otros equipos de red local abre: http://<tu_ip_local>:{PUERTO_WEB}\n")
+        
+        # host='0.0.0.0' permite acceso desde cualquier dispositivo en la misma red Wi-Fi o LAN
+        app.run(host='0.0.0.0', port=PUERTO_WEB, debug=False, threaded=True)
+    finally:
+        detener_servidor_llama()
