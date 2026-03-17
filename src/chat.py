@@ -27,16 +27,15 @@ modo_thinking_actual = False
 modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último
 historial_chat = []
 
-ASCII_ART = """\033[96m
-      ___    ____    _______ 
-     /   |  |___ \  |  ____|
-    / /| |    __) | | |__   
-   / /_| |   |__ <  |  __|  
-  / ____ |   ___) | | |____ 
- /_/   \_\  |____/  |______|
+ASCII_ART = "\033[96m" + """
+      _    ____  ____  
+     / \\  |___ \\| ___| 
+    / _ \\   __) |___ \\ 
+   / ___ \\ / __/ ___) |
+  /_/   \\_\\_____|____/ 
 
      [ Agente35 - Qwen ]
-\033[0m"""
+""" + "\033[0m"
 
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'db'), exist_ok=True)
