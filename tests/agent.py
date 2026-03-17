@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import threading
+import re
 from datetime import datetime
 from flask import Flask, request, Response, render_template, jsonify
 from openai import OpenAI
@@ -30,12 +31,31 @@ modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último
 historial_chat = []
 cliente = None
 
-app = Flask(__name__)
+SYSTEM_PROMPT = """Eres un asistente de Inteligencia Artificial super avanzado y administrador de sistemas.
+Tienes acceso al sistema anfitrión mediante una herramienta de shell.
+Si el usuario te pide ejecutar un comando o revisar archivos en su máquina, DEBES usar el siguiente formato XML estricto para generar la orden:
+
+<tool_call>
+{"name": "ejecutar_comando_sistema", "arguments": {"comando": "dir"}}
+</tool_call>
+
+<tools>
+{"type": "function", "function": {"name": "ejecutar_comando_sistema", "description": "Ejecuta un comando en la terminal de Windows", "parameters": {"type": "object", "properties": {"comando": {"type": "string"}}}, "required": ["comando"]}}
+</tools>
+
+Instrucciones:
+1. Explica al humano brevemente lo que vas a hacer.
+2. Emite la etiqueta <tool_call> con el JSON válido.
+3. Pausa tu generación; recibirás el resultado de la terminal en una etiqueta <tool_response> en el próximo turno.
+
+Solo usa <tool_call> si el usuario te lo solicita implícita o explícitamente y necesitas interaccionar con el PC real."""
+
+app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'tests', 'templates'))
 PUERTO_WEB = 5000
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('agent.html')
 
 @app.route('/api/status', methods=['GET'])
 def status():
@@ -63,12 +83,44 @@ def update_settings():
 @app.route('/api/clear', methods=['POST'])
 def clear_chat_web():
     global historial_chat
-    historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+    historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
     return jsonify({"status": "success"})
+
+def generador_stream_llm():
+    global historial_chat, cliente
+    try:
+        stream = cliente.chat.completions.create(
+            model="qwen-local",
+            messages=historial_chat,
+            temperature=0.6,
+            stream=True
+        )
+        
+        respuesta_completa = ""
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            
+            # Pensamientos
+            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                payload = json.dumps({"type": "think", "content": delta.reasoning_content})
+                yield f"data: {payload}\n\n"
+                
+            # Respuesta final hablada
+            elif hasattr(delta, 'content') and delta.content:
+                respuesta_completa += delta.content
+                payload = json.dumps({"type": "speak", "content": delta.content})
+                yield f"data: {payload}\n\n"
+        
+        historial_chat.append({"role": "assistant", "content": respuesta_completa})
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        print(f"Error en stream: {e}")
+        yield f"data: {json.dumps({'type': 'speak', 'content': 'Error interno del servidor.'})}\n\n"
 
 @app.route('/api/chat', methods=['POST'])
 def chat_stream():
-    global historial_chat, cliente
+    global historial_chat
     data = request.json
     user_message = data.get('message', '')
     
@@ -77,38 +129,63 @@ def chat_stream():
         
     historial_chat.append({"role": "user", "content": user_message})
 
-    def generate():
-        try:
-            stream = cliente.chat.completions.create(
-                model="qwen-local",
-                messages=historial_chat,
-                temperature=0.6,
-                stream=True
-            )
-            
-            respuesta_completa = ""
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                
-                # Pensamientos
-                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    payload = json.dumps({"type": "think", "content": delta.reasoning_content})
-                    yield f"data: {payload}\n\n"
-                    
-                # Respuesta final hablada
-                elif hasattr(delta, 'content') and delta.content:
-                    respuesta_completa += delta.content
-                    payload = json.dumps({"type": "speak", "content": delta.content})
-                    yield f"data: {payload}\n\n"
-            
-            historial_chat.append({"role": "assistant", "content": respuesta_completa})
-            yield "data: [DONE]\n\n"
-            
-        except Exception as e:
-            print(f"Error en stream: {e}")
-            yield f"data: {json.dumps({'type': 'speak', 'content': 'Error interno del servidor.'})}\n\n"
+    return Response(generador_stream_llm(), mimetype='text/event-stream')
 
-    return Response(generate(), mimetype='text/event-stream')
+@app.route('/api/tool_action', methods=['POST'])
+def tool_action():
+    global historial_chat
+    data = request.json
+    accion = data.get('action') # 'accept' o 'reject'
+    
+    # 1. Buscar el ultimo mensaje del asistente en el historial para encontrar el tool_call
+    ultimo_msg = None
+    for msg in reversed(historial_chat):
+        if msg["role"] == "assistant":
+            ultimo_msg = msg["content"]
+            break
+            
+    if not ultimo_msg:
+        return jsonify({"error": "No hay mensaje previo en el historial para procesar herramienta"}), 400
+        
+    match = re.search(r'<tool_call>\s*({.*?})\s*</tool_call>', ultimo_msg, re.DOTALL)
+    if not match:
+        return jsonify({"error": "No se encontró <tool_call> en el último mensaje"}), 400
+        
+    try:
+        json_str = match.group(1)
+        tool_data = json.loads(json_str)
+        comando = tool_data.get("arguments", {}).get("comando", "")
+        
+        if accion == "accept":
+            print(f"\n[*] Ejecutando comando desde WebUI: {comando}")
+            try:
+                # Ejecución de comando real
+                resultado = subprocess.run(
+                    comando, 
+                    shell=True, capture_output=True, text=True, timeout=30, cwd=BASE_DIR
+                )
+                salida = resultado.stdout if resultado.returncode == 0 else resultado.stderr
+                if not salida.strip():
+                    salida = "[Comando ejecutado con éxito. Sin salida visible.]"
+                if len(salida) > 3000:
+                    salida = salida[:3000] + "\n\n...[ALERTA: Salida truncada]"
+            except Exception as e:
+                salida = f"[Error al ejecutar: {e}]"
+            
+            codigo_respuesta = f"<tool_response>\n{salida}\n</tool_response>"
+        else:
+            # Rechazado por el usuario en la UI
+            print("\n[!] Ejecución cancelada por el usuario desde WebUI.")
+            codigo_respuesta = f"<tool_response>\n[Error: El humano ha rechazado la ejecución del comando por motivos de seguridad]\n</tool_response>"
+            
+        historial_chat.append({"role": "user", "content": codigo_respuesta})
+        
+        # Devolver el stream para que el modelo lea la tool_response y conteste inmediatamente
+        return Response(generador_stream_llm(), mimetype='text/event-stream')
+        
+    except Exception as e:
+        print(f"Error procesando accion_tool: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def iniciar_servidor_web():
     def run_flask():
@@ -134,7 +211,7 @@ ASCII_ART = "\033[96m" + """
  ║  ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████╗    ██████╔╝███████║║
  ║  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝    ╚═════╝ ╚══════╝║
  ║                                                                          ║
- ║  [ ◉ ] Modelo: Qwen 3.5 Turbo                                            ║
+ ║  [ ◉ ] Modelo: Qwen 3.5 Turbo         (Modo Agentivo Tools)              ║
  ║  [ ◉ ] Framework: Python 3        [ Estado: Online & Esperando input ]   ║
  ║                                                                          ║
  ╚══════════════════════════════════════════════════════════════════════════╝
@@ -142,7 +219,7 @@ ASCII_ART = "\033[96m" + """
 
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'db'), exist_ok=True)
-    db_path = os.path.join(BASE_DIR, 'db', 'llama_history.db')
+    db_path = os.path.join(BASE_DIR, 'db', 'llama_history_tools.db')
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute('''
@@ -217,7 +294,7 @@ def cargar_sesion(conn, session_id):
         ORDER BY id ASC
     ''', (session_id,))
     
-    nuevo_historial = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+    nuevo_historial = [{"role": "system", "content": SYSTEM_PROMPT}]
     for row in cursor.fetchall():
         role, content = row
         nuevo_historial.append({"role": role, "content": content})
@@ -235,14 +312,14 @@ def iniciar_servidor(thinking=False, modelo=None):
     comando = [
         RUTA_LLAMA_SERVER,
         "-m", ruta_modelo_completa,
-        "-c", "4096",
+        "-c", "8192",  # Aumentado a 8192 para mejor contexto de herramientas
         "-ngl", "99",
         "--port", str(PUERTO),
         "--chat-template-kwargs", kwargs
     ]
     
     estado = "ACTIVADO" if thinking else "DESACTIVADO"
-    print(f"\n\033[90m[+] Iniciando backend A35 (Modelo: {modelo} | Thinking: {estado})...\033[0m")
+    print(f"\n\033[90m[+] Iniciando backend A35 Tools (Modelo: {modelo} | Thinking: {estado})...\033[0m")
     
     servidor_process = subprocess.Popen(comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
@@ -268,7 +345,7 @@ def iniciar_servidor(thinking=False, modelo=None):
         print("\n\033[91m❌ Error: Tiempo de espera agotado al cargar el modelo.\033[0m")
         sys.exit(1)
 
-    print("\033[92m[+] Conectado al cerebro neural. Listo.\033[0m\n")
+    print("\033[92m[+] Conectado al cerebro neural (Modo Agente). Listo.\033[0m\n")
 
 def detener_servidor():
     global servidor_process
@@ -281,7 +358,7 @@ def detener_servidor():
 def imprimir_ayuda():
     print(ASCII_ART)
     print("\033[33m" + "="*50)
-    print("🤖 TERMINAL DE CONTROL AGENTE 35")
+    print("🤖 TERMINAL DE CONTROL AGENTE 35 (CON HERRAMIENTAS)")
     print("="*50 + "\033[0m")
     print("\033[1mComandos disponibles:\033[0m")
     print("  \033[96m/think\033[0m     -> Activa modo de razonamiento interno")
@@ -295,14 +372,82 @@ def imprimir_ayuda():
     print("  \033[96m/exit\033[0m      -> Desconecta llama-server y cierra terminal")
     print("\033[33m" + "="*50 + "\033[0m\n")
 
-def main():
-    global modo_thinking_actual, historial_chat, modelo_actual, cliente
+def procesar_herramienta(respuesta_completa, historial_chat):
+    """Busca tool_calls en la respuesta y ejecuta si el usuario lo permite."""
+    # Extraemos el bloque JSON dentro de <tool_call> ... </tool_call>
+    match = re.search(r'<tool_call>\s*({.*?})\s*</tool_call>', respuesta_completa, re.DOTALL)
     
-    os.makedirs(os.path.join(BASE_DIR, "src"), exist_ok=True)
+    if not match:
+        return False # No hubo llamada a herramienta
+
+    json_str = match.group(1)
+    try:
+        tool_data = json.loads(json_str)
+        if tool_data.get("name") == "ejecutar_comando_sistema":
+            comando = tool_data.get("arguments", {}).get("comando", "")
+            if not comando:
+                raise ValueError("JSON de argumentos vacío.")
+            
+            print(f"\n\n\033[1;33m[⚠️ ATENCIÓN] El modelo solicita ejecutar un comando en tu sistema computacional:\033[0m")
+            print(f"\033[93m> {comando}\033[0m")
+            
+            # Human in the Loop (Confirmación)
+            confirmacion = input("\033[91m¿Permitir ejecución? (S/N):\033[0m ").strip().lower()
+            
+            if confirmacion == 's':
+                print("[*] Ejecutando comando...")
+                try:
+                    # Ejecutamos con shell=True porque en Windows los built-ins (dir, echo) lo requieren
+                    resultado = subprocess.run(
+                        comando, 
+                        shell=True, 
+                        capture_output=True, 
+                        text=True, 
+                        timeout=30,
+                        cwd=BASE_DIR
+                    )
+                    salida = resultado.stdout if resultado.returncode == 0 else resultado.stderr
+                    if not salida.strip():
+                        salida = "[Comando ejecutado con éxito. Sin salida visible.]"
+                    
+                    # Asegurar que la salida no exceda el límite de tokens del LLM
+                    if len(salida) > 3000:
+                        salida = salida[:3000] + "\n\n...[ALERTA: Salida truncada por ser excesivamente larga para el contexto]..."
+                except subprocess.TimeoutExpired:
+                    salida = "[Error: El comando excedió el tiempo límite y fue abortado.]"
+                except Exception as e:
+                    salida = f"[Error al ejecutar: {e}]"
+                
+                print(f"\n\033[90m{salida}\033[0m\n")
+                
+                codigo_respuesta = f"<tool_response>\n{salida}\n</tool_response>"
+                historial_chat.append({"role": "user", "content": codigo_respuesta})
+                return True
+            else:
+                print("\033[91m[!] Ejecución cancelada por ti.\033[0m")
+                codigo_respuesta = f"<tool_response>\n[Error: El humano ha rechazado la ejecución del comando por motivos de seguridad]\n</tool_response>"
+                historial_chat.append({"role": "user", "content": codigo_respuesta})
+                return True
+                
+    except json.JSONDecodeError:
+        print("\n\033[91m[!] El modelo generó un JSON de tool alucinado o malformado.\033[0m")
+        codigo_respuesta = f"<tool_response>\n[Error: Formato JSON inválido. Reestructura e inténtalo de nuevo]\n</tool_response>"
+        historial_chat.append({"role": "user", "content": codigo_respuesta})
+        return True
+    except Exception as e:
+        print(f"\n\033[91m[!] Error al procesar herramienta: {e}\033[0m")
+        return False
+        
+    return False
+
+def main():
+    global modo_thinking_actual, historial_chat, modelo_actual, cliente, SYSTEM_PROMPT
+    
+    os.makedirs(os.path.join(BASE_DIR, "tests"), exist_ok=True)
     iniciar_servidor(thinking=modo_thinking_actual, modelo=modelo_actual)
     cliente = OpenAI(base_url=URL_BASE, api_key="local")
     
-    historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+    historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
     imprimir_ayuda()
 
     try:
@@ -319,11 +464,11 @@ def main():
             if comando in ["/salir", "/exit", "/quit"]:
                 break
             elif comando == "/clear":
-                historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+                historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
                 print("\033[33m[!] Historial limpio. Siguiendo en sesión actual.\033[0m")
                 continue
             elif comando == "/new":
-                historial_chat = [{"role": "system", "content": "Eres un asistente útil, directo y conciso."}]
+                historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
                 current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
                 print(f"\033[92m[+] Iniciada nueva sesión estandarte: {current_session_id}\033[0m")
                 continue
@@ -373,7 +518,8 @@ def main():
                 print(f"\n\033[36m--- SYSTEM PROMPT ACTUAL ---\033[0m\n{historial_chat[0]['content']}\n\033[36m----------------------------\033[0m")
                 nuevo_prompt = input("\033[92mEscribe la nueva System Prompt (o Enter para mantener la actual) ❯\033[0m ").strip()
                 if nuevo_prompt:
-                    historial_chat[0]['content'] = nuevo_prompt
+                    SYSTEM_PROMPT = nuevo_prompt
+                    historial_chat[0]['content'] = SYSTEM_PROMPT
                     print("\033[92m[+] System Prompt actualizada.\033[0m")
                 else:
                     print("\033[33m[!] System Prompt sin cambios.\033[0m")
@@ -400,88 +546,104 @@ def main():
             historial_chat.append({"role": "user", "content": usuario})
             log_message(conn, 'user', usuario, session_id=current_session_id)
             
-            print("\033[96mA35 ❯\033[0m ", end="", flush=True)
+            requiere_respuesta = True
             
-            try:
-                t0 = time.time()
-                t_first_token = None
-                t_think_start = None
-                t_think_end = None
-                t_speak_start = None
-                t_speak_end = None
-                think_token_count = 0
-                speak_token_count = 0
+            while requiere_respuesta:
+                print("\033[96mA35 ❯\033[0m ", end="", flush=True)
                 
-                stream = cliente.chat.completions.create(
-                    model="qwen-local",
-                    messages=historial_chat,
-                    temperature=0.6,
-                    stream=True
-                )
-                
-                respuesta_completa = ""
-                pensamiento_completo = ""
-                empezo_respuesta_final = False
-                
-                for chunk in stream:
-                    if t_first_token is None:
-                        t_first_token = time.time()
-                        
-                    delta = chunk.choices[0].delta
+                try:
+                    t0 = time.time()
+                    t_first_token = None
+                    t_think_start = None
+                    t_think_end = None
+                    t_speak_start = None
+                    t_speak_end = None
+                    think_token_count = 0
+                    speak_token_count = 0
                     
-                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content is not None:
-                        if t_think_start is None:
-                            t_think_start = time.time()
-                            
-                        think_token_count += 1
-                        print(f"\033[90m{delta.reasoning_content}\033[0m", end="", flush=True)
-                        pensamiento_completo += delta.reasoning_content
-                        
-                    elif hasattr(delta, 'content') and delta.content is not None:
-                        if t_think_end is None and pensamiento_completo != "":
-                            t_think_end = time.time()
-                            
-                        if t_speak_start is None:
-                            t_speak_start = time.time()
-                            
-                        if not empezo_respuesta_final and pensamiento_completo != "":
-                            print("\n\n\033[92m[Salida:]\033[0m\n", end="")
-                            empezo_respuesta_final = True
-                            
-                        speak_token_count += 1
-                        print(delta.content, end="", flush=True)
-                        respuesta_completa += delta.content
-                        
-                if t_speak_end is None:
-                    t_speak_end = time.time()
+                    stream = cliente.chat.completions.create(
+                        model="qwen-local",
+                        messages=historial_chat,
+                        temperature=0.6,
+                        stream=True
+                    )
                     
-                print("\n")
-                
-                ttft = (t_first_token - t0) if t_first_token else 0.0
-                dur_think = (t_think_end - t_think_start) if t_think_end and t_think_start else 0.0
-                dur_speak = (t_speak_end - t_speak_start) if t_speak_end and t_speak_start else 0.0
-                dur_total = dur_think + dur_speak
-                total_tokens = think_token_count + speak_token_count
-                
-                tps_think = (think_token_count / dur_think) if dur_think > 0 else 0.0
-                tps_speak = (speak_token_count / dur_speak) if dur_speak > 0 else 0.0
-                tps_total = (total_tokens / dur_total) if dur_total > 0 else 0.0
-                
-                print(f"\033[90m[⚡ TTFT: {ttft:.2f}s | 🧠 Think: {think_token_count} tk ({tps_think:.1f} t/s) | 🗣️ Speak: {speak_token_count} tk ({tps_speak:.1f} t/s)]\033[0m\n")
-                
-                historial_chat.append({"role": "assistant", "content": respuesta_completa})
-                
-                log_message(conn, role='assistant', content=respuesta_completa, thoughts=pensamiento_completo,
-                            model=modelo_actual, system_prompt="Eres un asistente útil, directo y conciso.",
-                            think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
-                            think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
-                            think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
-                            ttft=ttft, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0, 
-                            session_id=current_session_id)
-                
-            except Exception as e:
-                print(f"\n\033[91m[!] Error de conexión: {e}\033[0m")
-                historial_chat.pop()
+                    respuesta_completa = ""
+                    pensamiento_completo = ""
+                    empezo_respuesta_final = False
+                    
+                    for chunk in stream:
+                        if t_first_token is None:
+                            t_first_token = time.time()
+                            
+                        delta = chunk.choices[0].delta
+                        
+                        if hasattr(delta, 'reasoning_content') and delta.reasoning_content is not None:
+                            if t_think_start is None:
+                                t_think_start = time.time()
+                                
+                            think_token_count += 1
+                            print(f"\033[90m{delta.reasoning_content}\033[0m", end="", flush=True)
+                            pensamiento_completo += delta.reasoning_content
+                            
+                        elif hasattr(delta, 'content') and delta.content is not None:
+                            if t_think_end is None and pensamiento_completo != "":
+                                t_think_end = time.time()
+                                
+                            if t_speak_start is None:
+                                t_speak_start = time.time()
+                                
+                            if not empezo_respuesta_final and pensamiento_completo != "":
+                                print("\n\n\033[92m[Salida:]\033[0m\n", end="")
+                                empezo_respuesta_final = True
+                                
+                            speak_token_count += 1
+                            print(delta.content, end="", flush=True)
+                            respuesta_completa += delta.content
+                            
+                    if t_speak_end is None:
+                        t_speak_end = time.time()
+                        
+                    print("\n")
+                    
+                    ttft = (t_first_token - t0) if t_first_token else 0.0
+                    dur_think = (t_think_end - t_think_start) if t_think_end and t_think_start else 0.0
+                    dur_speak = (t_speak_end - t_speak_start) if t_speak_end and t_speak_start else 0.0
+                    dur_total = dur_think + dur_speak
+                    total_tokens = think_token_count + speak_token_count
+                    
+                    tps_think = (think_token_count / dur_think) if dur_think > 0 else 0.0
+                    tps_speak = (speak_token_count / dur_speak) if dur_speak > 0 else 0.0
+                    tps_total = (total_tokens / dur_total) if dur_total > 0 else 0.0
+                    
+                    print(f"\033[90m[⚡ TTFT: {ttft:.2f}s | 🧠 Think: {think_token_count} tk ({tps_think:.1f} t/s) | 🗣️ Speak: {speak_token_count} tk ({tps_speak:.1f} t/s)]\033[0m\n")
+                    
+                    historial_chat.append({"role": "assistant", "content": respuesta_completa})
+                    
+                    log_message(conn, role='assistant', content=respuesta_completa, thoughts=pensamiento_completo,
+                                model=modelo_actual, system_prompt=SYSTEM_PROMPT,
+                                think_tokens=think_token_count, speak_tokens=speak_token_count, total_tokens=total_tokens,
+                                think_time=dur_think, speak_time=dur_speak, total_time=dur_total,
+                                think_tps=tps_think, speak_tps=tps_speak, total_tps=tps_total,
+                                ttft=ttft, prompt_tokens=0, prompt_time=0.0, prompt_tps=0.0, 
+                                session_id=current_session_id)
+                                
+                    tuvo_herramienta = procesar_herramienta(respuesta_completa, historial_chat)
+                    
+                    if tuvo_herramienta:
+                        # Log the user's response to the tool execution so it stays in DB
+                        ultimo_mensaje_user = historial_chat[-1]["content"]
+                        log_message(conn, role='user', content=ultimo_mensaje_user, session_id=current_session_id)
+                        
+                        requiere_respuesta = True # El modelo vuelve a hablar al recibir la "tool_response"
+                    else:
+                        requiere_respuesta = False # Terminamos turno, vuelve a hablar el humano real
+                    
+                except Exception as e:
+                    print(f"\n\033[91m[!] Error de conexión: {e}\033[0m")
+                    if len(historial_chat) > 0 and historial_chat[-1]["role"] == "user":
+                        historial_chat.pop()
+                    requiere_respuesta = False
                 
     except KeyboardInterrupt:
         print("\n\033[33m[!] Interrupción humana (Ctrl+C).\033[0m")
