@@ -192,10 +192,12 @@ def imprimir_ayuda():
     print("\033[1mComandos disponibles:\033[0m")
     print("  \033[96m/think\033[0m     -> Activa modo de razonamiento interno")
     print("  \033[96m/nothink\033[0m   -> Desactiva modo de razonamiento")
-    print("  \033[96m/clear\033[0m     -> Borra historial actual")
-    print("  \033[96m/new\033[0m       -> Nueva sesión de chat blanca")
-    print("  \033[96m/sessions\033[0m  -> Lista y restaura conversaciones pasadas")
-    print("  \033[96m/exit\033[0m      -> Cierra terminal")
+    print("  \033[96m/model\033[0m     -> Lista y cambia el archivo .gguf actual")
+    print("  \033[96m/prompt\033[0m    -> Muestra y permite cambiar la System Prompt")
+    print("  \033[96m/clear\033[0m     -> Borra historial actual de la sesión")
+    print("  \033[96m/new\033[0m       -> Inicia una nueva sesión id en blanco")
+    print("  \033[96m/sessions\033[0m  -> Lista y restaura conversaciones anteriores")
+    print("  \033[96m/exit\033[0m      -> Desconecta llama-server y cierra terminal")
     print("\033[33m" + "="*50 + "\033[0m\n")
 
 def main():
@@ -267,6 +269,34 @@ def main():
                     cliente = OpenAI(base_url=URL_BASE, api_key="local")
                 else:
                     print("\033[33m[!] Modo de razonamiento ya desactivado.\033[0m")
+                continue
+
+            elif comando == "/prompt":
+                print(f"\n\033[36m--- SYSTEM PROMPT ACTUAL ---\033[0m\n{historial_chat[0]['content']}\n\033[36m----------------------------\033[0m")
+                nuevo_prompt = input("\033[92mEscribe la nueva System Prompt (o Enter para mantener la actual) ❯\033[0m ").strip()
+                if nuevo_prompt:
+                    historial_chat[0]['content'] = nuevo_prompt
+                    print("\033[92m[+] System Prompt actualizada.\033[0m")
+                else:
+                    print("\033[33m[!] System Prompt sin cambios.\033[0m")
+                continue
+            elif comando == "/model":
+                print("\n\033[36m--- MODELOS DISPONIBLES ---\033[0m")
+                for i, m in enumerate(MODELOS_DISPONIBLES):
+                    prefix = "📍" if m == modelo_actual else "  "
+                    print(f"\033[36m{prefix} {i+1}.\033[0m {m}")
+                    
+                sel = input("\n\033[92mElige el número del modelo (o Enter para cancelar) ❯\033[0m ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(MODELOS_DISPONIBLES):
+                    modelo_nuevo = MODELOS_DISPONIBLES[int(sel)-1]
+                    if modelo_nuevo != modelo_actual:
+                        modelo_actual = modelo_nuevo
+                        iniciar_servidor(thinking=modo_thinking_actual, modelo=modelo_actual)
+                        cliente = OpenAI(base_url=URL_BASE, api_key="local")
+                    else:
+                        print("\033[33m[!] Ese modelo ya está cargado en memoria actualmente.\033[0m")
+                else:
+                    print("\033[33m[!] Cambio de modelo cancelado.\033[0m")
                 continue
 
             historial_chat.append({"role": "user", "content": usuario})
