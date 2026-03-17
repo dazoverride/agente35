@@ -31,9 +31,9 @@ modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último
 historial_chat = []
 cliente = None
 
-SYSTEM_PROMPT = """Eres un asistente de Inteligencia Artificial super avanzado y administrador de sistemas.
+SYSTEM_PROMPT = """Eres un asistente de Inteligencia Artificial avanzado.
 Tienes acceso al sistema anfitrión mediante una herramienta de shell.
-Si el usuario te pide ejecutar un comando o revisar archivos en su máquina, DEBES usar el siguiente formato XML estricto para generar la orden:
+Si el usuario te pide ejecutar un comando o revisar archivos de forma explícita o implícita para ayudarle en su tarea, DEBES usar el siguiente formato XML estricto para generar la orden:
 
 <tool_call>
 {"name": "ejecutar_comando_sistema", "arguments": {"comando": "dir"}}
@@ -43,12 +43,11 @@ Si el usuario te pide ejecutar un comando o revisar archivos en su máquina, DEB
 {"type": "function", "function": {"name": "ejecutar_comando_sistema", "description": "Ejecuta un comando en la terminal de Windows", "parameters": {"type": "object", "properties": {"comando": {"type": "string"}}}, "required": ["comando"]}}
 </tools>
 
-Instrucciones:
-1. Explica al humano brevemente lo que vas a hacer.
-2. Emite la etiqueta <tool_call> con el JSON válido.
-3. Pausa tu generación; recibirás el resultado de la terminal en una etiqueta <tool_response> en el próximo turno.
-
-Solo usa <tool_call> si el usuario te lo solicita implícita o explícitamente y necesitas interaccionar con el PC real."""
+Instrucciones Críticas:
+1. Explica brevemente lo que vas a hacer y luego emite la etiqueta <tool_call> con JSON válido.
+2. Pausa tu generación; recibirás el resultado de la terminal en una etiqueta <tool_response> en el próximo turno.
+3. PREFERENCIA DE CHAT (Default Tool): Si el usuario te hace una pregunta general, te pide redactar texto, código o simplemente conversar, RESPONDÉ DIRECTAMENTE en texto natural. NO fuerces la ejecución de comandos si no es estrictamente necesario.
+4. ABSTENCIÓN: Si no tienes suficiente información para responder o actuar de forma segura, responde: "Datos insuficientes. No adivinaré." y pide más contexto al usuario."""
 
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'tests', 'templates'))
 PUERTO_WEB = 5000
@@ -86,12 +85,41 @@ def clear_chat_web():
     historial_chat = [{"role": "system", "content": SYSTEM_PROMPT}]
     return jsonify({"status": "success"})
 
+def preparar_historial_enmascarado(historial_completo, ventana_conservar=10):
+    """
+    Observation Masking: Mantiene las últimas N interacciones completas.
+    Para interacciones más antiguas con la terminal <tool_response>, reemplaza 
+    el contenido verboso con un placeholder para ahorrar tokens masivamente.
+    """
+    if len(historial_completo) <= ventana_conservar:
+        return historial_completo
+        
+    historial_enmascarado = []
+    umbral_idx = len(historial_completo) - ventana_conservar
+    
+    for i, msg in enumerate(historial_completo):
+        if i < umbral_idx and msg["role"] == "user" and "<tool_response>" in msg["content"]:
+            # Es viejo y es la salida de una terminal. Masking agresivo.
+            contenido_limpio = re.sub(
+                r'<tool_response>.*?</tool_response>', 
+                '<tool_response>\n[Detalles de la salida terminal antigua omitidos por brevedad para preservar contexto]\n</tool_response>', 
+                msg["content"], 
+                flags=re.DOTALL
+            )
+            historial_enmascarado.append({"role": msg["role"], "content": contenido_limpio})
+        else:
+            historial_enmascarado.append(msg)
+            
+    return historial_enmascarado
+
 def generador_stream_llm():
     global historial_chat, cliente
     try:
+        historial_optimizado = preparar_historial_enmascarado(historial_chat, 10)
+        
         stream = cliente.chat.completions.create(
             model="qwen-local",
-            messages=historial_chat,
+            messages=historial_optimizado,
             temperature=0.6,
             stream=True
         )
@@ -157,12 +185,19 @@ def tool_action():
         comando = tool_data.get("arguments", {}).get("comando", "")
         
         if accion == "accept":
-            print(f"\n[*] Ejecutando comando desde WebUI: {comando}")
+            print(f"\n[*] Ejecutando comando desde WebUI (Procesado Seguro): {comando}")
             try:
-                # Ejecución de comando real
+                # Sanitización muy básica
+                if not comando or len(comando) > 1000:
+                    raise ValueError("Comando vacío o excesivamente largo.")
+                    
+                env = os.environ.copy()
+                env["PYTHONUTF8"] = "1"
+                
+                # Ejecución de comando real robusta y segura para Windows
                 resultado = subprocess.run(
-                    comando, 
-                    shell=True, capture_output=True, text=True, timeout=30, cwd=BASE_DIR
+                    ["powershell", "-NoProfile", "-Command", "chcp 65001 >$null; " + comando], 
+                    shell=False, capture_output=True, text=True, timeout=30, cwd=BASE_DIR, env=env
                 )
                 salida = resultado.stdout if resultado.returncode == 0 else resultado.stderr
                 if not salida.strip():
@@ -395,16 +430,23 @@ def procesar_herramienta(respuesta_completa, historial_chat):
             confirmacion = input("\033[91m¿Permitir ejecución? (S/N):\033[0m ").strip().lower()
             
             if confirmacion == 's':
-                print("[*] Ejecutando comando...")
+                print("[*] Ejecutando comando (Procesado Seguro)...")
                 try:
-                    # Ejecutamos con shell=True porque en Windows los built-ins (dir, echo) lo requieren
+                    if not comando or len(comando) > 1000:
+                        raise ValueError("Comando peligroso, vacío o excesivamente largo. Rechazado en pre-ejecución.")
+                        
+                    env = os.environ.copy()
+                    env["PYTHONUTF8"] = "1"
+                    
+                    # Evitamos shell=True en favor de array discreto para prevenir Shell Injections
                     resultado = subprocess.run(
-                        comando, 
-                        shell=True, 
+                        ["powershell", "-NoProfile", "-Command", "chcp 65001 >$null; " + comando], 
+                        shell=False, 
                         capture_output=True, 
                         text=True, 
                         timeout=30,
-                        cwd=BASE_DIR
+                        cwd=BASE_DIR,
+                        env=env
                     )
                     salida = resultado.stdout if resultado.returncode == 0 else resultado.stderr
                     if not salida.strip():
@@ -561,9 +603,11 @@ def main():
                     think_token_count = 0
                     speak_token_count = 0
                     
+                    historial_optimizado = preparar_historial_enmascarado(historial_chat, 10)
+                    
                     stream = cliente.chat.completions.create(
                         model="qwen-local",
-                        messages=historial_chat,
+                        messages=historial_optimizado,
                         temperature=0.6,
                         stream=True
                     )
