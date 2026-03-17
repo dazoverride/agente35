@@ -221,7 +221,9 @@ def main():
                             continue
                             
                         # Si parseo OK, creamos archivos temporalmente para revisar sintaxis
-                        id_nombre = match_id.group(1).strip().replace(" ", "_").replace("/", "_")
+                        id_raw = match_id.group(1).split('-')[0].split(':')[0].strip() # Cortar si el modelo añade descripción extra 
+                        id_nombre = re.sub(r'[^a-zA-Z0-9_\-]', '_', id_raw).lower()
+                        id_nombre = re.sub(r'_+', '_', id_nombre)[:40].strip('_') # Colapsar múltiples _ y limitar a 40 chars
                         proyecto_dir = os.path.join(base_scripts, id_nombre)
                         os.makedirs(proyecto_dir, exist_ok=True)
                         
