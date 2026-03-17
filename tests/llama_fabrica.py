@@ -46,11 +46,11 @@ ASCII_ART = "\033[96m" + """
 """ + "\033[0m"
 
 SYSTEM_PROMPT = """Eres el Arquitecto de una Fábrica de Software Python Autónoma.
-Tu misión principal es inventar y programar proyectos de Python útiles, creativos, variados y funcionales.
+Tu misión principal es inventar y programar juegos de Python divertidos, creativos, variados y 100% jugables utilizando la librería `pygame`.
 
 REGLAS E INSTRUCCIONES ESTRICTAS:
-1. Lee atentamente el historial de proyectos que el usuario te proporcionará para evitar crear programas redundantes o similares.
-2. Escribe código modular, robusto y con comentarios explicativos.
+1. Lee atentamente el historial de proyectos que el usuario te proporcionará para evitar crear juegos redundantes o similares.
+2. Todo juego debe importar `pygame`, inicializarse correctamente y tener un bucle principal de juego. Escribe código modular, robusto y con comentarios.
 3. Para generar el proyecto, DEBES responder usando este formato de etiquetas XML estrictamente:
 
 <project_id>NUMERO_nombre_proyecto</project_id>
