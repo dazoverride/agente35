@@ -1,5 +1,0 @@
-=== HISTORIAL DE PROGRAMAS CREADOS ===
-- 1_app_nebula_defender : Defiende el núcleo de la nebulosa contra una lluvia infinita de asteroides usando un láser rotativo.
-- 2_app_space_pirate_scout : Explora planetas aleatorios, recarga tu nave y sobrevive a encuentros de piratas espaciales en un simulador de exploración.
-- 3_app_neon_rhythm_racer : Una carrera de ritmo donde las notas musicales caen y debes presionar la tecla correcta en el momento exacto para ganar puntos y evitar Game Over.
-- 4_app_quantum_tetris : Una variante de Tetris donde las piezas tienen propiedades cuánticas: pueden superponerse y colapsar al tocar otras, cambiando de color y forma aleatoriamente.
