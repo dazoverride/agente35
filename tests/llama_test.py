@@ -11,7 +11,10 @@ from openai import OpenAI
 # Rutas
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARPETA_MODELOS = os.path.join(BASE_DIR, "models")
-RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b8352-bin-win-cuda-12.4-x64", "llama-server.exe")
+if os.name == 'nt':
+    RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b9245-bin-win-cuda-12.4-x64", "llama-server.exe")
+else:
+    RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b9245-bin-ubuntu-x64", "llama-server")
 TEST_PROMPTS_FILE_NORMAL = os.path.join(BASE_DIR, 'tmp', 'pruebas.txt')
 TEST_PROMPTS_FILE_HARD = os.path.join(BASE_DIR, 'tmp', 'pruebas_hard.txt')
 DB_PATH = os.path.join(BASE_DIR, 'db', 'llama_test_history.db')
