@@ -13,9 +13,10 @@ sudo apt install python3 python3-pip python3-venv wget unzip screen -y
 # 2. Descargar e instalar llama.cpp precompilado para Ubuntu
 echo "[2/4] Descargando llama.cpp (Motor de Inferencia)..."
 if [ ! -d "llama-b9245-bin-ubuntu-x64" ]; then
-    wget https://github.com/ggerganov/llama.cpp/releases/download/b9245/llama-b9245-bin-ubuntu-x64.zip
-    unzip llama-b9245-bin-ubuntu-x64.zip -d llama-b9245-bin-ubuntu-x64
-    rm llama-b9245-bin-ubuntu-x64.zip
+    wget https://github.com/ggerganov/llama.cpp/releases/download/b9245/llama-b9245-bin-ubuntu-x64.tar.gz
+    mkdir -p llama-b9245-bin-ubuntu-x64
+    tar -xzf llama-b9245-bin-ubuntu-x64.tar.gz -C llama-b9245-bin-ubuntu-x64
+    rm llama-b9245-bin-ubuntu-x64.tar.gz
     chmod +x llama-b9245-bin-ubuntu-x64/llama-server
     echo "✅ llama.cpp instalado."
 else
