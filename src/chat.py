@@ -29,7 +29,7 @@ if not MODELOS_DISPONIBLES:
 # Variables globales
 servidor_process = None
 modo_thinking_actual = False
-modelo_actual = MODELOS_DISPONIBLES[-1] # Por defecto usa el último
+modelo_actual = "google_gemma-4-E2B-it-Q4_K_M.gguf"
 historial_chat = []
 cliente = None
 
