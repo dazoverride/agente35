@@ -18,7 +18,7 @@ else:
 TEST_PROMPTS_FILE_NORMAL = os.path.join(BASE_DIR, 'tmp', 'pruebas.txt')
 TEST_PROMPTS_FILE_HARD = os.path.join(BASE_DIR, 'tmp', 'pruebas_hard.txt')
 DB_PATH = os.path.join(BASE_DIR, 'db', 'llama_test_history.db')
-PUERTO = 8080
+PUERTO = 8085
 URL_BASE = f"http://127.0.0.1:{PUERTO}/v1"
 
 # Variables globales

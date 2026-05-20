@@ -16,7 +16,7 @@ if os.name == 'nt':
     RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b9245-bin-win-cuda-12.4-x64", "llama-server.exe")
 else:
     RUTA_LLAMA_SERVER = os.path.join(BASE_DIR, "llama-b9245-bin-ubuntu-x64", "llama-server")
-PUERTO = 8080
+PUERTO = 8085
 URL_BASE = f"http://127.0.0.1:{PUERTO}/v1"
 
 # Obtener modelos disponibles
